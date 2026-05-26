@@ -1,6 +1,7 @@
 import { Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { QUEUE_NAMES, type QueueName } from '@nih/shared';
+import { handleQueueJob } from './processors.js';
 
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const connection = new Redis(redisUrl, {
@@ -14,16 +15,7 @@ function createQueue(name: QueueName): Queue {
 function createWorker(name: QueueName): Worker {
   return new Worker(
     name,
-    async (job) => {
-      console.log(
-        JSON.stringify({
-          event: 'worker.job.received',
-          queue: name,
-          jobId: job.id,
-          jobName: job.name,
-        }),
-      );
-    },
+    async (job) => handleQueueJob(name, job),
     { connection },
   );
 }
