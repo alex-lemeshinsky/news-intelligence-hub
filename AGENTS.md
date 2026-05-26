@@ -49,15 +49,18 @@ Mandatory:
 - Tailwind CSS for UI styling.
 - react-flow for the graph UI.
 - BullMQ and Redis for queues.
-- Bull Board or equivalent for queue monitoring.
+- Bull Board for queue monitoring.
 - Docker and docker compose for one-command startup.
 - Own LLM abstraction with both OpenAI and Anthropic adapters.
 - Active LLM provider and model selected through environment variables.
 
-Participant choices that must be justified in README ADRs:
-- Backend: NestJS or Directus.
-- Frontend: React or Next.js.
-- Database: PostgreSQL or MySQL.
+Chosen project stack:
+- Backend: NestJS.
+- Frontend: Next.js.
+- Database: PostgreSQL.
+- Queue monitoring: Bull Board.
+
+These choices are settled for this repository. Future agents should not reopen the backend/frontend/database/queue-monitoring decision unless the user explicitly asks. The README ADRs must still justify these choices and explain their trade-offs.
 
 Constraints:
 - Do not make LangChain, LlamaIndex, or another high-level LLM framework the architecture. Such libraries may only be used if every part used is understood and justified.
@@ -84,7 +87,7 @@ Must have for acceptance:
 - Article feed with filters and article cards.
 - Graph page using react-flow, typed edges, and filters by node type and category.
 - Axis settings UI with regeneration action.
-- Bull Board or equivalent wired into the stack.
+- Bull Board wired into the stack.
 - One-command startup with docker compose.
 - README with startup guide and Architectural Decisions.
 - Responsive, tidy, minimal Tailwind UI.
@@ -166,7 +169,7 @@ US-11 Period digest:
 - Digest includes top entities, top categories, key articles, and a short LLM-written overview.
 
 US-12 Queue monitoring:
-- Bull Board or equivalent is protected with basic auth credentials from env.
+- Bull Board is protected with basic auth credentials from env.
 - App may expose an "Open queues" admin link behind an env flag.
 - Queue panel should be a ready-made tool, not custom-built inside the app.
 
@@ -196,7 +199,7 @@ Principle 4: Multi-tenant isolation.
 
 Principle 5: Reproducible env-driven setup.
 - On a clean Docker machine, the app starts with docker compose after filling `.env` from `.env.example`.
-- Required services include database, Redis, API/backend, frontend or SSR server, workers, and Bull Board.
+- Required services include PostgreSQL, Redis, NestJS API/backend, Next.js frontend/SSR server, workers, and Bull Board.
 - Migrations and seed data run automatically at startup or via one documented command.
 - Seeded axes and demo data/feed must let reviewers see a working graph within minutes.
 
@@ -413,7 +416,10 @@ Minimum ADR topics:
 - Entity deduplication strategy.
 - Cost control and LLM caching.
 - LLM provider failure/error-handling strategy.
-- Backend choice, NestJS or Directus, with justification.
+- Backend choice: why NestJS is used for this project.
+- Frontend choice: why Next.js is used for this project.
+- Database choice: why PostgreSQL is used for this project.
+- Queue monitoring choice: why Bull Board is used for this project.
 
 ADRs must match the real implementation. Generic or detached ADRs will be treated as evidence that the solution is not understood.
 
@@ -422,7 +428,7 @@ ADRs must match the real implementation. Generic or detached ADRs will be treate
 Before implementing:
 - Re-read this file and the current README.
 - Inspect the actual repository structure and package tooling.
-- Pick the backend/frontend/database choices intentionally and record why.
+- Treat NestJS, Next.js, PostgreSQL, and Bull Board as the selected stack, and record the rationale in README ADRs.
 - Plan the data model around multi-user isolation, article reuse, labels, axes, graph nodes/edges, queues, LLM cache, and telemetry.
 - Keep Must scope first. Do not spend time on Could features before the acceptance gate is covered.
 

@@ -1,0 +1,26 @@
+{
+  "name": "@nih/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "predev": "npm --prefix ../../packages/shared run build",
+    "dev": "tsx watch src/main.ts",
+    "prebuild": "npm --prefix ../../packages/shared run build",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "prelint": "npm --prefix ../../packages/shared run build",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@nih/shared": "file:../../packages/shared",
+    "bullmq": "^5.34.2",
+    "ioredis": "^5.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

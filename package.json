@@ -1,0 +1,35 @@
+{
+  "name": "news-intelligence-hub",
+  "private": true,
+  "version": "0.1.0",
+  "description": "UA-Skills News Intelligence Hub monorepo",
+  "scripts": {
+    "build": "npm run build:shared && npm run build:database && npm run build:api && npm run build:web && npm run build:worker",
+    "lint": "npm run lint:shared && npm run lint:database && npm run lint:api && npm run lint:web && npm run lint:worker",
+    "dev:api": "PORT=3001 npm --prefix apps/api run start:dev",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:worker": "npm --prefix apps/worker run dev",
+    "build:api": "npm --prefix apps/api run build",
+    "build:web": "npm --prefix apps/web run build",
+    "build:worker": "npm --prefix apps/worker run build",
+    "build:shared": "npm --prefix packages/shared run build",
+    "build:database": "npm --prefix packages/database run build",
+    "lint:api": "npm --prefix apps/api run lint",
+    "lint:web": "npm --prefix apps/web run lint",
+    "lint:worker": "npm --prefix apps/worker run lint",
+    "lint:shared": "npm --prefix packages/shared run lint",
+    "lint:database": "npm --prefix packages/database run lint",
+    "test:api": "npm --prefix apps/api run test",
+    "test:e2e:api": "npm --prefix apps/api run test:e2e",
+    "db:generate": "npm --prefix packages/database run generate",
+    "db:migrate": "npm --prefix packages/database run migrate",
+    "db:studio": "npm --prefix packages/database run studio"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
