@@ -8,30 +8,40 @@ datasource db {
 }
 
 model User {
-  id               String   @id @default(cuid())
-  email            String   @unique
+  id               String    @id @default(cuid())
+  email            String    @unique
   passwordHash     String
   emailConfirmedAt DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  feeds      Feed[]
-  categories Category[]
-  axes       ClassificationAxis[]
+  feeds                   Feed[]
+  categories              Category[]
+  axes                    ClassificationAxis[]
+  articleLabels           ArticleLabel[]
+  entities                Entity[]
+  graphEdges              GraphEdge[]
+  llmTelemetry            LlmTelemetry[]
+  digests                 Digest[]
+  regenerationRuns        RegenerationRun[]
+  queueJobs               QueueJobRecord[]
+  emailConfirmationTokens EmailConfirmationToken[]
 }
 
 model Feed {
-  id          String     @id @default(cuid())
-  userId      String
-  url         String
-  title       String?
-  status      FeedStatus @default(ACTIVE)
-  lastError   String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id        String     @id @default(cuid())
+  userId    String
+  url       String
+  title     String?
+  status    FeedStatus @default(ACTIVE)
+  lastError String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feedItems FeedArticle[]
 
+  @@unique([userId, url])
   @@index([userId])
 }
 
@@ -44,6 +54,9 @@ model Category {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  articleAssignments ArticleCategoryAssignment[]
+  graphEdges         GraphEdge[]
+
   @@unique([userId, name])
 }
 
@@ -55,13 +68,335 @@ model ClassificationAxis {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments ArticleAxisAssignment[]
 
   @@unique([userId, name])
+}
+
+model EmailConfirmationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Article {
+  id            String    @id @default(cuid())
+  normalizedUrl String    @unique
+  contentHash   String
+  canonicalUrl  String?
+  title         String
+  author        String?
+  publishedAt   DateTime?
+  rawContent    String?
+  extractedText String?
+  language      String?
+  firstSeenAt   DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  feedItems        FeedArticle[]
+  labels           ArticleLabel[]
+  similaritySource ArticleSimilarity[] @relation("SimilarArticleSource")
+  similarityTarget ArticleSimilarity[] @relation("SimilarArticleTarget")
+
+  @@index([contentHash])
+  @@index([publishedAt])
+}
+
+model FeedArticle {
+  id          String   @id @default(cuid())
+  feedId      String
+  articleId   String
+  externalId  String?
+  originalUrl String
+  pulledAt    DateTime @default(now())
+
+  feed    Feed    @relation(fields: [feedId], references: [id], onDelete: Cascade)
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([feedId, articleId])
+  @@index([articleId])
+}
+
+model ArticleLabel {
+  id              String                  @id @default(cuid())
+  userId          String
+  articleId       String
+  status          ArticleProcessingStatus @default(PENDING)
+  importance      ArticleImportance?
+  summary         String?
+  preFilterReason String?
+  llmCacheId      String?
+  processedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  user       User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article    Article                     @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  llmCache   LlmCache?                   @relation(fields: [llmCacheId], references: [id], onDelete: SetNull)
+  categories ArticleCategoryAssignment[]
+  axes       ArticleAxisAssignment[]
+  mentions   ArticleEntityMention[]
+
+  @@unique([userId, articleId])
+  @@index([userId, status])
+  @@index([userId, importance])
+}
+
+model ArticleCategoryAssignment {
+  id             String @id @default(cuid())
+  articleLabelId String
+  categoryId     String
+
+  articleLabel ArticleLabel @relation(fields: [articleLabelId], references: [id], onDelete: Cascade)
+  category     Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([articleLabelId, categoryId])
+  @@index([categoryId])
+}
+
+model ArticleAxisAssignment {
+  id             String @id @default(cuid())
+  articleLabelId String
+  axisId         String
+  value          String
+
+  articleLabel ArticleLabel       @relation(fields: [articleLabelId], references: [id], onDelete: Cascade)
+  axis         ClassificationAxis @relation(fields: [axisId], references: [id], onDelete: Cascade)
+
+  @@unique([articleLabelId, axisId])
+  @@index([axisId])
+}
+
+model Entity {
+  id            String     @id @default(cuid())
+  userId        String
+  canonicalName String
+  type          EntityType
+  aliases       String[]   @default([])
+  description   String?
+  firstSeen     Int?
+  lastSeen      Int?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  user     User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mentions ArticleEntityMention[]
+
+  @@unique([userId, canonicalName, type])
+  @@index([userId, type])
+}
+
+model ArticleEntityMention {
+  id             String @id @default(cuid())
+  articleLabelId String
+  entityId       String
+
+  articleLabel ArticleLabel @relation(fields: [articleLabelId], references: [id], onDelete: Cascade)
+  entity       Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([articleLabelId, entityId])
+  @@index([entityId])
+}
+
+model ArticleSimilarity {
+  id               String         @id @default(cuid())
+  userId           String
+  articleId        String
+  similarArticleId String
+  kind             SimilarityKind
+  score            Float?
+  createdAt        DateTime       @default(now())
+
+  article        Article @relation("SimilarArticleSource", fields: [articleId], references: [id], onDelete: Cascade)
+  similarArticle Article @relation("SimilarArticleTarget", fields: [similarArticleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId, similarArticleId, kind])
+  @@index([userId, articleId])
+  @@index([userId, similarArticleId])
+}
+
+model GraphEdge {
+  id         String        @id @default(cuid())
+  userId     String
+  fromNodeId String
+  toNodeId   String
+  kind       GraphEdgeKind
+  weight     Int?
+  score      Float?
+  categoryId String?
+  ts         Int?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, fromNodeId, toNodeId, kind])
+  @@index([userId, kind])
+  @@index([categoryId])
+}
+
+model LlmCache {
+  id               String       @id @default(cuid())
+  operation        LlmOperation
+  contentHash      String
+  provider         LlmProvider
+  model            String
+  cacheKey         String       @unique
+  responseJson     Json
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  createdAt        DateTime     @default(now())
+
+  articleLabels ArticleLabel[]
+
+  @@index([operation, contentHash])
+}
+
+model LlmTelemetry {
+  id               String       @id @default(cuid())
+  userId           String?
+  operation        LlmOperation
+  provider         LlmProvider
+  model            String
+  promptTokens     Int          @default(0)
+  completionTokens Int          @default(0)
+  totalTokens      Int          @default(0)
+  success          Boolean
+  latencyMs        Int?
+  errorCode        String?
+  createdAt        DateTime     @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, operation])
+  @@index([createdAt])
+}
+
+model Digest {
+  id          String       @id @default(cuid())
+  userId      String
+  status      DigestStatus @default(PENDING)
+  periodStart DateTime
+  periodEnd   DateTime
+  scopeJson   Json
+  overview    String?
+  error       String?
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([periodStart, periodEnd])
+}
+
+model RegenerationRun {
+  id        String           @id @default(cuid())
+  userId    String
+  status    BackgroundStatus @default(PENDING)
+  total     Int              @default(0)
+  processed Int              @default(0)
+  failed    Int              @default(0)
+  error     String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model QueueJobRecord {
+  id        String           @id @default(cuid())
+  userId    String?
+  queueName String
+  jobId     String?
+  jobName   String
+  status    BackgroundStatus @default(PENDING)
+  payload   Json?
+  error     String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([queueName, status])
+  @@index([userId])
 }
 
 enum FeedStatus {
   ACTIVE
   PAUSED
   PULL_ERROR
+}
+
+enum ArticleProcessingStatus {
+  PENDING
+  FILTERED
+  PROCESSED
+  FAILED
+}
+
+enum ArticleImportance {
+  HIGH
+  NORMAL
+  JUNK
+}
+
+enum EntityType {
+  PERSON
+  COMPANY
+  PRODUCT
+  TECHNOLOGY
+  LOCATION
+}
+
+enum SimilarityKind {
+  URL
+  CONTENT_HASH
+  SEMANTIC
+}
+
+enum GraphEdgeKind {
+  MENTIONS
+  CO_MENTION
+  SIMILAR
+}
+
+enum LlmProvider {
+  OPENAI
+  ANTHROPIC
+}
+
+enum LlmOperation {
+  ARTICLE_ANALYSIS
+  ENTITY_MATCH
+  DIGEST
+  REGENERATION
+}
+
+enum DigestStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum BackgroundStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
 }
