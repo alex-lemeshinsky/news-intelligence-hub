@@ -1,0 +1,108 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API: Debug NestJS",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:debug:vscode"],
+      "cwd": "${workspaceFolder}/apps/api",
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "3001",
+        "DATABASE_URL": "postgresql://nih:nih_password@localhost:5432/news_intelligence_hub?schema=public",
+        "REDIS_URL": "redis://localhost:6379",
+        "JWT_SECRET": "dev_secret",
+        "BULL_BOARD_ENABLED": "true",
+        "BULL_BOARD_USER": "admin",
+        "BULL_BOARD_PASSWORD": "change_me"
+      },
+      "console": "integratedTerminal",
+      "autoAttachChildProcesses": true,
+      "restart": true,
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Worker: Debug BullMQ",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--inspect=127.0.0.1:9322",
+        "--import",
+        "tsx",
+        "src/main.ts"
+      ],
+      "cwd": "${workspaceFolder}/apps/worker",
+      "env": {
+        "NODE_ENV": "development",
+        "REDIS_URL": "redis://localhost:6379"
+      },
+      "preLaunchTask": "build:shared",
+      "console": "integratedTerminal",
+      "restart": true,
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Web: Debug Next.js",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "./node_modules/next/dist/bin/next",
+        "dev",
+        "--webpack",
+        "--port",
+        "3000"
+      ],
+      "cwd": "${workspaceFolder}/apps/web",
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "console": "integratedTerminal",
+      "autoAttachChildProcesses": false,
+      "serverReadyAction": {
+        "pattern": "Local:\\s+(https?://localhost:[0-9]+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      },
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Web: Browser Client",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:3000",
+      "webRoot": "${workspaceFolder}/apps/web",
+      "sourceMaps": true
+    },
+    {
+      "name": "API: Debug Jest",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "test:debug:vscode"],
+      "cwd": "${workspaceFolder}/apps/api",
+      "env": {
+        "NODE_ENV": "test",
+        "JWT_SECRET": "test_secret"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack: Debug API + Worker + Web",
+      "preLaunchTask": "infra:up",
+      "configurations": [
+        "API: Debug NestJS",
+        "Worker: Debug BullMQ",
+        "Web: Debug Next.js",
+        "Web: Browser Client"
+      ],
+      "stopAll": true
+    }
+  ]
+}
