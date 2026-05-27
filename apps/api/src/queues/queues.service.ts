@@ -4,7 +4,7 @@ import { Job, JobsOptions, Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { QUEUE_NAMES, QueueName } from '@nih/shared';
 
-type QueuePayload = Record<string, unknown>;
+type QueuePayload = object;
 
 @Injectable()
 export class QueuesService implements OnModuleDestroy {

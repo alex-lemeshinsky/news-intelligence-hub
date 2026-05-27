@@ -5,18 +5,21 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "predev": "npm --prefix ../../packages/shared run build",
+    "predev": "npm --prefix ../../packages/shared run build && npm --prefix ../../packages/database run build",
     "dev": "tsx watch src/main.ts",
-    "prebuild": "npm --prefix ../../packages/shared run build",
+    "prebuild": "npm --prefix ../../packages/shared run build && npm --prefix ../../packages/database run build",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "prelint": "npm --prefix ../../packages/shared run build",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "prelint": "npm --prefix ../../packages/shared run build && npm --prefix ../../packages/database run build",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/**/*.spec.ts"
   },
   "dependencies": {
+    "@nih/database": "file:../../packages/database",
     "@nih/shared": "file:../../packages/shared",
     "bullmq": "^5.34.2",
-    "ioredis": "^5.8.2"
+    "ioredis": "^5.8.2",
+    "rss-parser": "^3.13.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

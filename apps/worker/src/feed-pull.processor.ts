@@ -1,0 +1,182 @@
+import { createHash } from 'crypto';
+import { FeedPullJobData } from '@nih/shared';
+import { ParsedFeed, parseFeedUrl } from './feed-parser.js';
+import { preFilterArticle } from './pre-filter.js';
+import { ArticleProcessingStatus, FeedStatus } from './prisma-enums.js';
+
+export interface FeedPullDependencies {
+  database: FeedPullDatabase;
+  parseFeed?: (url: string) => Promise<ParsedFeed>;
+  minContentChars?: number;
+}
+
+export interface FeedPullDatabase {
+  article: {
+    upsert(args: Record<string, unknown>): Promise<{ id: string }>;
+  };
+  articleLabel: {
+    upsert(args: Record<string, unknown>): Promise<unknown>;
+  };
+  feed: {
+    findFirst(args: Record<string, unknown>): Promise<{
+      id: string;
+      userId: string;
+      url: string;
+      title?: string | null;
+    } | null>;
+    update(args: Record<string, unknown>): Promise<unknown>;
+  };
+  feedArticle: {
+    upsert(args: Record<string, unknown>): Promise<unknown>;
+  };
+}
+
+export async function pullFeedJob(
+  dependencies: FeedPullDependencies,
+  payload: FeedPullJobData,
+): Promise<void> {
+  const feed = await dependencies.database.feed.findFirst({
+    where: {
+      id: payload.feedId,
+      userId: payload.userId,
+    },
+  });
+
+  if (!feed) {
+    throw new Error('Feed not found for user.');
+  }
+
+  try {
+    const parsedFeed = await (dependencies.parseFeed ?? parseFeedUrl)(feed.url);
+    for (const item of parsedFeed.items) {
+      await persistFeedItem(dependencies, payload, feed.id, item);
+    }
+
+    await dependencies.database.feed.update({
+      where: { id: feed.id },
+      data: {
+        status: FeedStatus.ACTIVE,
+        lastError: null,
+        title: parsedFeed.title ?? feed.title,
+      },
+    });
+  } catch (error) {
+    await dependencies.database.feed.update({
+      where: { id: feed.id },
+      data: {
+        status: FeedStatus.PULL_ERROR,
+        lastError: getErrorMessage(error),
+      },
+    });
+    throw error;
+  }
+}
+
+async function persistFeedItem(
+  dependencies: FeedPullDependencies,
+  payload: FeedPullJobData,
+  feedId: string,
+  item: ParsedFeed['items'][number],
+): Promise<void> {
+  const normalizedUrl = normalizeArticleUrl(item.url);
+  const preFilter = preFilterArticle(
+    {
+      title: item.title,
+      content: item.content,
+    },
+    {
+      minContentChars: dependencies.minContentChars ?? 500,
+    },
+  );
+  const contentHash = hashContent(preFilter.text || item.content || item.title);
+
+  const article = await dependencies.database.article.upsert({
+    where: { normalizedUrl },
+    create: {
+      normalizedUrl,
+      contentHash,
+      canonicalUrl: item.url,
+      title: item.title,
+      author: item.author,
+      publishedAt: item.publishedAt,
+      rawContent: item.content,
+      extractedText: preFilter.text,
+    },
+    update: {
+      title: item.title,
+      author: item.author,
+      publishedAt: item.publishedAt,
+      rawContent: item.content,
+      extractedText: preFilter.text,
+      contentHash,
+    },
+  });
+
+  await dependencies.database.feedArticle.upsert({
+    where: {
+      feedId_articleId: {
+        feedId,
+        articleId: article.id,
+      },
+    },
+    create: {
+      feedId,
+      articleId: article.id,
+      externalId: item.externalId,
+      originalUrl: item.url,
+    },
+    update: {
+      externalId: item.externalId,
+      originalUrl: item.url,
+      pulledAt: new Date(),
+    },
+  });
+
+  const status = preFilter.accepted
+    ? ArticleProcessingStatus.PENDING
+    : ArticleProcessingStatus.FILTERED;
+
+  await dependencies.database.articleLabel.upsert({
+    where: {
+      userId_articleId: {
+        userId: payload.userId,
+        articleId: article.id,
+      },
+    },
+    create: {
+      userId: payload.userId,
+      articleId: article.id,
+      status,
+      preFilterReason: preFilter.reason,
+    },
+    update: {
+      status,
+      preFilterReason: preFilter.reason,
+    },
+  });
+}
+
+export function normalizeArticleUrl(url: string): string {
+  const parsedUrl = new URL(url);
+  parsedUrl.hash = '';
+  parsedUrl.protocol = parsedUrl.protocol.toLowerCase();
+  parsedUrl.hostname = parsedUrl.hostname.toLowerCase();
+
+  const sortedParams = [...parsedUrl.searchParams.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  parsedUrl.search = '';
+  for (const [key, value] of sortedParams) {
+    parsedUrl.searchParams.append(key, value);
+  }
+
+  return parsedUrl.toString();
+}
+
+function hashContent(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown feed pull error.';
+}

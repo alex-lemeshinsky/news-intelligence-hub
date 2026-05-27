@@ -1,14 +1,16 @@
 import { Job } from 'bullmq';
-import { QUEUE_NAMES, QueueName } from '@nih/shared';
+import { FeedPullJobData, JOB_NAMES, QUEUE_NAMES, QueueName } from '@nih/shared';
+import { FeedPullDependencies, pullFeedJob } from './feed-pull.processor.js';
 
-export const WORKER_JOB_NAMES = {
-  pullFeed: 'pull-feed',
-  processArticle: 'process-article',
-  regenerateArticles: 'regenerate-articles',
-  buildDigest: 'build-digest',
-} as const;
+export interface WorkerDependencies {
+  feedPull: FeedPullDependencies;
+}
 
-export async function handleQueueJob(queueName: QueueName, job: Job): Promise<void> {
+export async function handleQueueJob(
+  queueName: QueueName,
+  job: Job,
+  dependencies: WorkerDependencies,
+): Promise<void> {
   console.log(
     JSON.stringify({
       event: 'worker.job.received',
@@ -20,5 +22,9 @@ export async function handleQueueJob(queueName: QueueName, job: Job): Promise<vo
 
   if (!Object.values(QUEUE_NAMES).includes(queueName)) {
     throw new Error(`Unknown queue: ${queueName}`);
+  }
+
+  if (queueName === QUEUE_NAMES.feedPull && job.name === JOB_NAMES.pullFeed) {
+    await pullFeedJob(dependencies.feedPull, job.data as FeedPullJobData);
   }
 }
