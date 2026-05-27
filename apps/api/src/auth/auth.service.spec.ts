@@ -11,7 +11,38 @@ interface TokenCreateArgs {
   data: { userId: string; tokenHash: string; expiresAt: Date };
 }
 
+interface TokenUpdateArgs {
+  where: { id: string };
+  data: { usedAt: Date };
+}
+
+interface UserUpdateArgs {
+  where: { id: string };
+  data: { emailConfirmedAt: Date };
+  select: object;
+}
+
+interface UserFindArgs {
+  where: { id?: string; email?: string };
+  select: object;
+}
+
+interface TokenFindArgs {
+  where: { tokenHash: string };
+  include: { user: boolean };
+}
+
+interface TokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  user: AuthUser;
+}
+
 describe('AuthService', () => {
+  const originalEnv = process.env;
   const user = {
     id: 'user_1',
     email: 'person@example.com',
@@ -20,12 +51,12 @@ describe('AuthService', () => {
   };
 
   const createUser = jest.fn<Promise<AuthUser>, [UserCreateArgs]>();
-  const findUser = jest.fn();
-  const updateUser = jest.fn();
+  const findUser = jest.fn<Promise<unknown>, [UserFindArgs]>();
+  const updateUser = jest.fn<Promise<AuthUser>, [UserUpdateArgs]>();
   const createToken = jest.fn<Promise<{ id: string }>, [TokenCreateArgs]>();
-  const findToken = jest.fn();
-  const updateToken = jest.fn();
-  const signAsync = jest.fn();
+  const findToken = jest.fn<Promise<TokenRecord | null>, [TokenFindArgs]>();
+  const updateToken = jest.fn<Promise<{ id: string }>, [TokenUpdateArgs]>();
+  const signAsync = jest.fn<Promise<string>, [object]>();
 
   const database = {
     user: {
@@ -46,6 +77,15 @@ describe('AuthService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env = {
+      ...originalEnv,
+      DEV_EMAIL_CONFIRMATION: 'true',
+      WEB_ORIGIN: 'http://localhost:3000',
+    };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
   });
 
   it('registers a normalized email and returns a dev confirmation token', async () => {
@@ -73,7 +113,31 @@ describe('AuthService', () => {
     expect(tokenCreateCall?.data.tokenHash).toEqual(expect.any(String));
     expect(tokenCreateCall?.data.expiresAt).toBeInstanceOf(Date);
     expect(result.devConfirmationToken).toEqual(expect.any(String));
+    expect(result.devConfirmationUrl).toEqual(
+      expect.stringContaining('http://localhost:3000/confirm-email?token='),
+    );
     expect(result.user.email).toBe('person@example.com');
+  });
+
+  it('hides dev confirmation values when dev mode is disabled', async () => {
+    process.env.DEV_EMAIL_CONFIRMATION = 'false';
+    createUser.mockResolvedValue({
+      ...user,
+      email: 'person@example.com',
+      emailConfirmedAt: null,
+    });
+    createToken.mockResolvedValue({ id: 'token_1' });
+
+    const service = new AuthService(database as never, jwtService);
+
+    const result = await service.register({
+      email: 'person@example.com',
+      password: 'valid-password',
+    });
+
+    expect(createToken).toHaveBeenCalledTimes(1);
+    expect(result.devConfirmationToken).toBeUndefined();
+    expect(result.devConfirmationUrl).toBeUndefined();
   });
 
   it('rejects login until email is confirmed', async () => {
@@ -109,5 +173,98 @@ describe('AuthService', () => {
       email: 'person@example.com',
     });
     expect(result.accessToken).toBe('jwt-token');
+  });
+
+  it('confirms email tokens and returns a signed session token', async () => {
+    const unconfirmedUser = {
+      ...user,
+      emailConfirmedAt: null,
+    };
+    const confirmedAt = new Date('2026-05-27T10:00:00.000Z');
+
+    findToken.mockResolvedValue({
+      id: 'confirmation_1',
+      userId: 'user_1',
+      tokenHash: 'hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      usedAt: null,
+      user: unconfirmedUser,
+    });
+    updateToken.mockResolvedValue({ id: 'confirmation_1' });
+    updateUser.mockResolvedValue({
+      ...user,
+      emailConfirmedAt: confirmedAt,
+    });
+    signAsync.mockResolvedValue('jwt-token');
+
+    const service = new AuthService(database as never, jwtService);
+
+    const result = await service.confirmEmail('raw-token');
+
+    expect(updateToken).toHaveBeenCalledWith({
+      where: { id: 'confirmation_1' },
+      data: { usedAt: expect.any(Date) as Date },
+    });
+    expect(updateUser).toHaveBeenCalledWith({
+      where: { id: 'user_1' },
+      data: { emailConfirmedAt: expect.any(Date) as Date },
+      select: expect.any(Object) as object,
+    });
+    const tokenUpdateCall = updateToken.mock.calls[0]?.[0] as
+      | TokenUpdateArgs
+      | undefined;
+    const userUpdateCall = updateUser.mock.calls[0]?.[0] as
+      | UserUpdateArgs
+      | undefined;
+
+    expect(tokenUpdateCall?.data.usedAt).toBeInstanceOf(Date);
+    expect(userUpdateCall?.data.emailConfirmedAt).toBeInstanceOf(Date);
+    expect(signAsync).toHaveBeenCalledWith({
+      sub: 'user_1',
+      email: 'person@example.com',
+    });
+    expect(result.accessToken).toBe('jwt-token');
+    expect(result.user.emailConfirmedAt).toBe(confirmedAt);
+  });
+
+  it('resends confirmation without revealing whether an account exists', async () => {
+    findUser.mockResolvedValue(null);
+
+    const service = new AuthService(database as never, jwtService);
+
+    const result = await service.resendConfirmation({
+      email: 'missing@example.com',
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(createToken).not.toHaveBeenCalled();
+  });
+
+  it('returns the current user from a valid access token', async () => {
+    const verifyAsync = jest.fn().mockResolvedValue({ sub: 'user_1' });
+    findUser.mockResolvedValue({
+      id: 'user_1',
+      email: 'person@example.com',
+      emailConfirmedAt: user.emailConfirmedAt,
+    });
+
+    const service = new AuthService(
+      database as never,
+      {
+        ...jwtService,
+        verifyAsync,
+      } as unknown as JwtService,
+    );
+
+    const result = await service.verifyAccessToken('jwt-token');
+
+    expect(verifyAsync).toHaveBeenCalledWith('jwt-token');
+    const findUserCall = findUser.mock.calls[0]?.[0] as
+      | UserFindArgs
+      | undefined;
+
+    expect(findUserCall?.where).toEqual({ id: 'user_1' });
+    expect(findUserCall?.select).toBeDefined();
+    expect(result.id).toBe('user_1');
   });
 });

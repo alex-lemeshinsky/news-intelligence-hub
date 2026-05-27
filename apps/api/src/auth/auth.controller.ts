@@ -1,7 +1,27 @@
-import { Body, Controller, HttpCode, Post, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import {
+  getAuthClearCookieOptions,
+  getAuthCookieName,
+  getAuthCookieOptions,
+} from './auth.config';
 import { AuthService } from './auth.service';
-import type { LoginInput, RegisterInput } from './auth.service';
+import type {
+  AuthUser,
+  LoginInput,
+  RegisterInput,
+  ResendConfirmationInput,
+} from './auth.service';
+import { CookieAuthGuard } from './cookie-auth.guard';
+import { CurrentUser } from './current-user.decorator';
 
 interface ConfirmEmailInput {
   token: string;
@@ -17,8 +37,19 @@ export class AuthController {
   }
 
   @Post('confirm-email')
-  confirmEmail(@Body() body: ConfirmEmailInput) {
-    return this.authService.confirmEmail(body.token);
+  async confirmEmail(
+    @Body() body: ConfirmEmailInput,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.confirmEmail(body.token);
+    this.setAuthCookie(response, result.accessToken);
+    return { user: result.user };
+  }
+
+  @Post('resend-confirmation')
+  @HttpCode(200)
+  resendConfirmation(@Body() body: ResendConfirmationInput) {
+    return this.authService.resendConfirmation(body);
   }
 
   @Post('login')
@@ -28,18 +59,24 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ) {
     const result = await this.authService.login(body);
-    response.cookie('nih_access_token', result.accessToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-    });
-    return result;
+    this.setAuthCookie(response, result.accessToken);
+    return { user: result.user };
   }
 
   @Post('logout')
   @HttpCode(200)
   logout(@Res({ passthrough: true }) response: Response) {
-    response.clearCookie('nih_access_token');
+    response.clearCookie(getAuthCookieName(), getAuthClearCookieOptions());
     return { ok: true };
+  }
+
+  @Get('me')
+  @UseGuards(CookieAuthGuard)
+  me(@CurrentUser() user: AuthUser) {
+    return { user };
+  }
+
+  private setAuthCookie(response: Response, accessToken: string): void {
+    response.cookie(getAuthCookieName(), accessToken, getAuthCookieOptions());
   }
 }
