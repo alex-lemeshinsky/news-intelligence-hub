@@ -7,6 +7,10 @@ import { JwtService } from '@nestjs/jwt';
 import { hash, verify } from 'argon2';
 import { createHash, randomBytes } from 'crypto';
 import { DatabaseService } from '../database/database.service';
+import {
+  buildDevConfirmationUrl,
+  getDevConfirmationEnabled,
+} from './auth.config';
 
 export interface AuthUser {
   id: string;
@@ -27,11 +31,27 @@ export interface LoginInput {
 export interface RegisterResult {
   user: AuthUser;
   devConfirmationToken?: string;
+  devConfirmationUrl?: string;
 }
 
 export interface LoginResult {
   user: AuthUser;
   accessToken: string;
+}
+
+export interface ResendConfirmationInput {
+  email: string;
+}
+
+export interface ResendConfirmationResult {
+  ok: true;
+  devConfirmationToken?: string;
+  devConfirmationUrl?: string;
+}
+
+interface AuthTokenPayload {
+  sub?: unknown;
+  email?: unknown;
 }
 
 const publicUserSelect = {
@@ -70,7 +90,7 @@ export class AuthService {
 
       return {
         user,
-        devConfirmationToken,
+        ...this.createDevConfirmationFields(devConfirmationToken),
       };
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -81,7 +101,7 @@ export class AuthService {
     }
   }
 
-  async confirmEmail(token: string): Promise<AuthUser> {
+  async confirmEmail(token: string): Promise<LoginResult> {
     const tokenHash = this.hashToken(token);
     const confirmation = await this.database.emailConfirmationToken.findUnique({
       where: { tokenHash },
@@ -101,11 +121,37 @@ export class AuthService {
       data: { usedAt: new Date() },
     });
 
-    return this.database.user.update({
+    const user = await this.database.user.update({
       where: { id: confirmation.userId },
       data: { emailConfirmedAt: new Date() },
       select: publicUserSelect,
     });
+    const accessToken = await this.signAccessToken(user);
+
+    return {
+      user,
+      accessToken,
+    };
+  }
+
+  async resendConfirmation(
+    input: ResendConfirmationInput,
+  ): Promise<ResendConfirmationResult> {
+    const email = this.normalizeEmail(input.email);
+    const user = await this.database.user.findUnique({
+      where: { email },
+      select: publicUserSelect,
+    });
+
+    if (!user || user.emailConfirmedAt) {
+      return { ok: true };
+    }
+
+    const devConfirmationToken = await this.createConfirmationToken(user.id);
+    return {
+      ok: true,
+      ...this.createDevConfirmationFields(devConfirmationToken),
+    };
   }
 
   async login(input: LoginInput): Promise<LoginResult> {
@@ -128,10 +174,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    const accessToken = await this.jwtService.signAsync({
-      sub: user.id,
-      email: user.email,
-    });
+    const accessToken = await this.signAccessToken(user);
 
     return {
       user: {
@@ -154,6 +197,30 @@ export class AuthService {
     }
   }
 
+  async verifyAccessToken(token: string): Promise<AuthUser> {
+    let payload: AuthTokenPayload;
+    try {
+      payload = await this.jwtService.verifyAsync<AuthTokenPayload>(token);
+    } catch {
+      throw new UnauthorizedException('Session is invalid.');
+    }
+
+    if (typeof payload.sub !== 'string') {
+      throw new UnauthorizedException('Session is invalid.');
+    }
+
+    const user = await this.database.user.findUnique({
+      where: { id: payload.sub },
+      select: publicUserSelect,
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Session is invalid.');
+    }
+
+    return user;
+  }
+
   private async createConfirmationToken(userId: string): Promise<string> {
     const token = randomBytes(32).toString('hex');
     const tokenHash = this.hashToken(token);
@@ -168,6 +235,26 @@ export class AuthService {
     });
 
     return token;
+  }
+
+  private createDevConfirmationFields(
+    token: string,
+  ): Pick<RegisterResult, 'devConfirmationToken' | 'devConfirmationUrl'> {
+    if (!getDevConfirmationEnabled()) {
+      return {};
+    }
+
+    return {
+      devConfirmationToken: token,
+      devConfirmationUrl: buildDevConfirmationUrl(token),
+    };
+  }
+
+  private signAccessToken(user: AuthUser): Promise<string> {
+    return this.jwtService.signAsync({
+      sub: user.id,
+      email: user.email,
+    });
   }
 
   private normalizeEmail(email: string): string {

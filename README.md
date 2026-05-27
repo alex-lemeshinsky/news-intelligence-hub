@@ -35,4 +35,13 @@ UA-Skills: News Intelligence Hub
 - `npm run test:api`: run API unit tests.
 - `npm run db:generate`: generate the Prisma client from `packages/database/prisma/schema.prisma`.
 
+## Auth Flow
+
+- Register at `http://localhost:3000/register`.
+- In development, the API returns a confirmation link because
+  `DEV_EMAIL_CONFIRMATION=true`.
+- Confirming email creates the same HttpOnly cookie session used by login.
+- Protected API routes derive the current user from the cookie/JWT and no longer
+  accept `x-user-id` as an ownership substitute.
+
 See `AGENTS.md` for the full hackathon task brief and implementation requirements.

@@ -3,65 +3,48 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
+import type { AuthUser } from '../auth/auth.service';
+import { CookieAuthGuard } from '../auth/cookie-auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { FeedsService } from './feeds.service';
 import type { CreateFeedInput, UpdateFeedInput } from './feeds.service';
 
 @Controller('feeds')
+@UseGuards(CookieAuthGuard)
 export class FeedsController {
   constructor(private readonly feedsService: FeedsService) {}
 
   @Get()
-  list(@Headers('x-user-id') userId: string | undefined) {
-    return this.feedsService.list(this.requireUserId(userId));
+  list(@CurrentUser() user: AuthUser) {
+    return this.feedsService.list(user.id);
   }
 
   @Post()
-  create(
-    @Headers('x-user-id') userId: string | undefined,
-    @Body() body: CreateFeedInput,
-  ) {
-    return this.feedsService.create(this.requireUserId(userId), body);
+  create(@CurrentUser() user: AuthUser, @Body() body: CreateFeedInput) {
+    return this.feedsService.create(user.id, body);
   }
 
   @Patch(':id')
   update(
-    @Headers('x-user-id') userId: string | undefined,
+    @CurrentUser() user: AuthUser,
     @Param('id') feedId: string,
     @Body() body: UpdateFeedInput,
   ) {
-    return this.feedsService.update(this.requireUserId(userId), feedId, body);
+    return this.feedsService.update(user.id, feedId, body);
   }
 
   @Delete(':id')
-  remove(
-    @Headers('x-user-id') userId: string | undefined,
-    @Param('id') feedId: string,
-  ) {
-    return this.feedsService.remove(this.requireUserId(userId), feedId);
+  remove(@CurrentUser() user: AuthUser, @Param('id') feedId: string) {
+    return this.feedsService.remove(user.id, feedId);
   }
 
   @Post(':id/pull')
-  pull(
-    @Headers('x-user-id') userId: string | undefined,
-    @Param('id') feedId: string,
-  ) {
-    return this.feedsService.enqueueManualPull(
-      this.requireUserId(userId),
-      feedId,
-    );
-  }
-
-  private requireUserId(userId: string | undefined): string {
-    if (!userId) {
-      throw new UnauthorizedException('Missing x-user-id header.');
-    }
-
-    return userId;
+  pull(@CurrentUser() user: AuthUser, @Param('id') feedId: string) {
+    return this.feedsService.enqueueManualPull(user.id, feedId);
   }
 }
