@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: news_intelligence_hub
+          POSTGRES_USER: nih
+          POSTGRES_PASSWORD: nih_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nih -d news_intelligence_hub"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://nih:nih_password@localhost:5432/news_intelligence_hub?schema=public
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci_secret
+      DEV_EMAIL_CONFIRMATION: "true"
+      BULL_BOARD_ENABLED: "false"
+      LLM_PROVIDER: openai
+      LLM_MODEL: ci-placeholder
+      LLM_ARTICLE_TOKEN_LIMIT: "4000"
+      LLM_CONCURRENCY: "1"
+      FEED_MIN_CONTENT_CHARS: "500"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Run lint checks
+        run: npm run lint:ci
+
+      - name: Build all projects
+        run: npm run build
+
+      - name: Run API unit tests
+        run: npm test
+
+      - name: Run API e2e tests
+        run: npm run test:e2e:api

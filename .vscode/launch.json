@@ -6,7 +6,10 @@
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start:debug:vscode"],
+      "runtimeArgs": [
+        "run",
+        "start:debug:vscode"
+      ],
       "cwd": "${workspaceFolder}/apps/api",
       "env": {
         "NODE_ENV": "development",
@@ -21,7 +24,9 @@
       "console": "integratedTerminal",
       "autoAttachChildProcesses": true,
       "restart": true,
-      "skipFiles": ["<node_internals>/**"]
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
     },
     {
       "name": "Worker: Debug BullMQ",
@@ -42,7 +47,9 @@
       "preLaunchTask": "build:shared",
       "console": "integratedTerminal",
       "restart": true,
-      "skipFiles": ["<node_internals>/**"]
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
     },
     {
       "name": "Web: Debug Next.js",
@@ -67,29 +74,56 @@
         "uriFormat": "%s",
         "action": "openExternally"
       },
-      "skipFiles": ["<node_internals>/**"]
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
     },
     {
-      "name": "Web: Browser Client",
-      "type": "chrome",
+      "name": "Database: Prisma Studio",
+      "type": "node",
       "request": "launch",
-      "url": "http://localhost:3000",
-      "webRoot": "${workspaceFolder}/apps/web",
-      "sourceMaps": true
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "studio",
+        "--",
+        "--port",
+        "5555",
+        "--browser",
+        "none"
+      ],
+      "cwd": "${workspaceFolder}/packages/database",
+      "env": {
+        "DATABASE_URL": "postgresql://nih:nih_password@localhost:5432/news_intelligence_hub?schema=public"
+      },
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "pattern": "Prisma Studio is up on (http://localhost:[0-9]+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      },
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
     },
     {
       "name": "API: Debug Jest",
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "test:debug:vscode"],
+      "runtimeArgs": [
+        "run",
+        "test:debug:vscode"
+      ],
       "cwd": "${workspaceFolder}/apps/api",
       "env": {
         "NODE_ENV": "test",
         "JWT_SECRET": "test_secret"
       },
       "console": "integratedTerminal",
-      "skipFiles": ["<node_internals>/**"]
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
     }
   ],
   "compounds": [
@@ -100,7 +134,7 @@
         "API: Debug NestJS",
         "Worker: Debug BullMQ",
         "Web: Debug Next.js",
-        "Web: Browser Client"
+        "Database: Prisma Studio"
       ],
       "stopAll": true
     }
