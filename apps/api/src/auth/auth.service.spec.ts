@@ -56,6 +56,8 @@ describe('AuthService', () => {
   const createToken = jest.fn<Promise<{ id: string }>, [TokenCreateArgs]>();
   const findToken = jest.fn<Promise<TokenRecord | null>, [TokenFindArgs]>();
   const updateToken = jest.fn<Promise<{ id: string }>, [TokenUpdateArgs]>();
+  const createManyCategories = jest.fn<Promise<{ count: number }>, [object]>();
+  const createManyAxes = jest.fn<Promise<{ count: number }>, [object]>();
   const signAsync = jest.fn<Promise<string>, [object]>();
 
   const database = {
@@ -68,6 +70,12 @@ describe('AuthService', () => {
       create: createToken,
       findUnique: findToken,
       update: updateToken,
+    },
+    category: {
+      createMany: createManyCategories,
+    },
+    classificationAxis: {
+      createMany: createManyAxes,
     },
   };
 
@@ -95,6 +103,8 @@ describe('AuthService', () => {
       emailConfirmedAt: null,
     });
     createToken.mockResolvedValue({ id: 'token_1' });
+    createManyCategories.mockResolvedValue({ count: 4 });
+    createManyAxes.mockResolvedValue({ count: 5 });
 
     const service = new AuthService(database as never, jwtService);
 
@@ -112,6 +122,16 @@ describe('AuthService', () => {
     expect(tokenCreateCall?.data.userId).toBe('user_1');
     expect(tokenCreateCall?.data.tokenHash).toEqual(expect.any(String));
     expect(tokenCreateCall?.data.expiresAt).toBeInstanceOf(Date);
+    expect(createManyCategories).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipDuplicates: true,
+      }),
+    );
+    expect(createManyAxes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipDuplicates: true,
+      }),
+    );
     expect(result.devConfirmationToken).toEqual(expect.any(String));
     expect(result.devConfirmationUrl).toEqual(
       expect.stringContaining('http://localhost:3000/confirm-email?token='),

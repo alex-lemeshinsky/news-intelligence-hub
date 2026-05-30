@@ -6,6 +6,10 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { hash, verify } from 'argon2';
 import { createHash, randomBytes } from 'crypto';
+import {
+  DEFAULT_CATEGORY_NAMES,
+  DEFAULT_CLASSIFICATION_AXES,
+} from '../categories/categories.service';
 import { DatabaseService } from '../database/database.service';
 import {
   buildDevConfirmationUrl,
@@ -86,6 +90,7 @@ export class AuthService {
         },
         select: publicUserSelect,
       });
+      await this.seedDefaultConfiguration(user.id);
       const devConfirmationToken = await this.createConfirmationToken(user.id);
 
       return {
@@ -235,6 +240,21 @@ export class AuthService {
     });
 
     return token;
+  }
+
+  private async seedDefaultConfiguration(userId: string): Promise<void> {
+    await this.database.category.createMany({
+      data: DEFAULT_CATEGORY_NAMES.map((name) => ({ name, userId })),
+      skipDuplicates: true,
+    });
+    await this.database.classificationAxis.createMany({
+      data: DEFAULT_CLASSIFICATION_AXES.map((axis) => ({
+        name: axis.name,
+        userId,
+        values: [...axis.values],
+      })),
+      skipDuplicates: true,
+    });
   }
 
   private createDevConfirmationFields(
