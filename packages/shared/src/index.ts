@@ -21,6 +21,12 @@ export interface FeedPullJobData {
   userId: string;
 }
 
+export interface ArticleProcessingJobData {
+  articleId: string;
+  articleLabelId: string;
+  userId: string;
+}
+
 export const ENTITY_TYPES = [
   'person',
   'company',

@@ -7,10 +7,15 @@ describe('pullFeedJob', () => {
   it('persists feed articles and marks usable content pending processing', async () => {
     const calls: string[] = [];
     const database = createDatabaseDouble(calls);
+    const enqueuedJobs: unknown[] = [];
 
     await pullFeedJob(
       {
         database,
+        enqueueArticleProcessing: async (payload) => {
+          calls.push('articleProcessing.enqueue');
+          enqueuedJobs.push(payload);
+        },
         parseFeed: async () => ({
           title: 'Tech Feed',
           items: [
@@ -36,18 +41,30 @@ describe('pullFeedJob', () => {
       'article.upsert',
       'feedArticle.upsert',
       'articleLabel.upsert:PENDING',
+      'articleProcessing.enqueue',
       'feed.update:ACTIVE',
     ]);
     assert.equal(database.article.upsertCalls[0]?.where.normalizedUrl, 'https://example.com/article?a=1&b=2');
+    assert.deepEqual(enqueuedJobs, [
+      {
+        articleId: 'article_1',
+        articleLabelId: 'label_1',
+        userId: 'user_1',
+      },
+    ]);
   });
 
   it('stores deterministic pre-filter results without sending junk forward', async () => {
     const calls: string[] = [];
     const database = createDatabaseDouble(calls);
+    let enqueuedJobs = 0;
 
     await pullFeedJob(
       {
         database,
+        enqueueArticleProcessing: async () => {
+          enqueuedJobs += 1;
+        },
         parseFeed: async () => ({
           title: 'Tech Feed',
           items: [
@@ -68,6 +85,7 @@ describe('pullFeedJob', () => {
 
     assert.ok(calls.includes('articleLabel.upsert:FILTERED'));
     assert.equal(database.articleLabel.upsertCalls[0]?.create.preFilterReason, 'too_short');
+    assert.equal(enqueuedJobs, 0);
   });
 
   it('marks the feed with pull error when parsing fails', async () => {

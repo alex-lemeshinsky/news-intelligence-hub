@@ -1,8 +1,19 @@
 import { Job } from 'bullmq';
-import { FeedPullJobData, JOB_NAMES, QUEUE_NAMES, QueueName } from '@nih/shared';
+import {
+  ArticleProcessingJobData,
+  FeedPullJobData,
+  JOB_NAMES,
+  QUEUE_NAMES,
+  QueueName,
+} from '@nih/shared';
+import {
+  ArticleProcessingDependencies,
+  processArticleJob,
+} from './article-processing.processor.js';
 import { FeedPullDependencies, pullFeedJob } from './feed-pull.processor.js';
 
 export interface WorkerDependencies {
+  articleProcessing: ArticleProcessingDependencies;
   feedPull: FeedPullDependencies;
 }
 
@@ -26,5 +37,19 @@ export async function handleQueueJob(
 
   if (queueName === QUEUE_NAMES.feedPull && job.name === JOB_NAMES.pullFeed) {
     await pullFeedJob(dependencies.feedPull, job.data as FeedPullJobData);
+    return;
   }
+
+  if (
+    queueName === QUEUE_NAMES.articleProcessing &&
+    job.name === JOB_NAMES.processArticle
+  ) {
+    await processArticleJob(
+      dependencies.articleProcessing,
+      job.data as ArticleProcessingJobData,
+    );
+    return;
+  }
+
+  throw new Error(`Unknown job ${job.name} for queue ${queueName}`);
 }

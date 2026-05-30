@@ -1,11 +1,14 @@
 import { createHash } from 'crypto';
-import { FeedPullJobData } from '@nih/shared';
+import { ArticleProcessingJobData, FeedPullJobData } from '@nih/shared';
 import { ParsedFeed, parseFeedUrl } from './feed-parser.js';
 import { preFilterArticle } from './pre-filter.js';
 import { ArticleProcessingStatus, FeedStatus } from './prisma-enums.js';
 
 export interface FeedPullDependencies {
   database: FeedPullDatabase;
+  enqueueArticleProcessing?: (
+    payload: ArticleProcessingJobData,
+  ) => Promise<void>;
   parseFeed?: (url: string) => Promise<ParsedFeed>;
   minContentChars?: number;
 }
@@ -15,7 +18,7 @@ export interface FeedPullDatabase {
     upsert(args: Record<string, unknown>): Promise<{ id: string }>;
   };
   articleLabel: {
-    upsert(args: Record<string, unknown>): Promise<unknown>;
+    upsert(args: Record<string, unknown>): Promise<{ id: string }>;
   };
   feed: {
     findFirst(args: Record<string, unknown>): Promise<{
@@ -136,7 +139,7 @@ async function persistFeedItem(
     ? ArticleProcessingStatus.PENDING
     : ArticleProcessingStatus.FILTERED;
 
-  await dependencies.database.articleLabel.upsert({
+  const articleLabel = await dependencies.database.articleLabel.upsert({
     where: {
       userId_articleId: {
         userId: payload.userId,
@@ -154,6 +157,14 @@ async function persistFeedItem(
       preFilterReason: preFilter.reason,
     },
   });
+
+  if (status === ArticleProcessingStatus.PENDING) {
+    await dependencies.enqueueArticleProcessing?.({
+      articleId: article.id,
+      articleLabelId: articleLabel.id,
+      userId: payload.userId,
+    });
+  }
 }
 
 export function normalizeArticleUrl(url: string): string {
