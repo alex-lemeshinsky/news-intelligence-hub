@@ -83,6 +83,16 @@ export function WorkspaceClient({
     });
   }
 
+  async function pullFeed(feed: Feed) {
+    await runAction(`feed:${feed.id}:pull`, async () => {
+      await browserApiFetch<{ id?: string | number }>(`/feeds/${feed.id}/pull`, {
+        method: "POST",
+      });
+      setNotice("Feed pull queued.");
+      await refreshWorkspace();
+    });
+  }
+
   async function runAction(actionId: string, action: () => Promise<void>) {
     setPendingAction(actionId);
     setError(null);
@@ -187,6 +197,7 @@ export function WorkspaceClient({
                   key={feed.id}
                   pendingAction={pendingAction}
                   onDelete={deleteFeed}
+                  onPull={pullFeed}
                   onStatusChange={updateFeedStatus}
                 />
               ))
@@ -233,11 +244,13 @@ function Metric({ label, value }: { label: string; value: number }) {
 function FeedRow({
   feed,
   onDelete,
+  onPull,
   onStatusChange,
   pendingAction,
 }: {
   feed: Feed;
   onDelete: (feed: Feed) => Promise<void>;
+  onPull: (feed: Feed) => Promise<void>;
   onStatusChange: (feed: Feed, status: FeedStatus) => Promise<void>;
   pendingAction: string | null;
 }) {
@@ -262,6 +275,16 @@ function FeedRow({
         </p>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          className="h-8 rounded-md bg-slate-950 px-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+          type="button"
+          disabled={
+            feed.status === "PAUSED" || pendingAction === `feed:${feed.id}:pull`
+          }
+          onClick={() => onPull(feed)}
+        >
+          {pendingAction === `feed:${feed.id}:pull` ? "Queueing" : "Pull now"}
+        </button>
         <button
           className="h-8 rounded-md border border-slate-300 px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
           type="button"
