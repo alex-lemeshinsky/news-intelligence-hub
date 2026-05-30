@@ -2,7 +2,7 @@ import { ArticleImportance, ArticleProcessingStatus } from '@prisma/client';
 import { ArticlesService } from './articles.service';
 
 describe('ArticlesService', () => {
-  const findLabels = jest.fn();
+  const findLabels = jest.fn<Promise<unknown[]>, [FindLabelsArgs]>();
 
   const database = {
     articleLabel: {
@@ -26,25 +26,23 @@ describe('ArticlesService', () => {
       timeWindow: '7d',
     });
 
-    expect(findLabels).toHaveBeenCalledWith(
-      expect.objectContaining({
-        orderBy: [{ article: { publishedAt: 'desc' } }, { createdAt: 'desc' }],
-        where: expect.objectContaining({
-          categories: { some: { categoryId: 'cat_1' } },
-          importance: ArticleImportance.HIGH,
-          status: ArticleProcessingStatus.PROCESSED,
-          userId: 'user_1',
-        }),
-      }),
-    );
-    const call = findLabels.mock.calls[0]?.[0] as {
-      where: {
-        article: {
-          feedItems: { some: { feedId: string; feed: { userId: string } } };
-          publishedAt: { gte: Date };
-        };
-      };
-    };
+    const call = findLabels.mock.calls[0]?.[0];
+
+    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error('Expected articleLabel.findMany to be called.');
+    }
+
+    expect(call.orderBy).toEqual([
+      { article: { publishedAt: 'desc' } },
+      { createdAt: 'desc' },
+    ]);
+    expect(call.where.categories).toEqual({
+      some: { categoryId: 'cat_1' },
+    });
+    expect(call.where.importance).toBe(ArticleImportance.HIGH);
+    expect(call.where.status).toBe(ArticleProcessingStatus.PROCESSED);
+    expect(call.where.userId).toBe('user_1');
     expect(call.where.article.feedItems.some).toEqual({
       feed: { userId: 'user_1' },
       feedId: 'feed_1',
@@ -59,7 +57,11 @@ describe('ArticlesService', () => {
           canonicalUrl: 'https://example.com/article',
           feedItems: [
             {
-              feed: { id: 'feed_1', title: 'Primary Feed', url: 'https://feed' },
+              feed: {
+                id: 'feed_1',
+                title: 'Primary Feed',
+                url: 'https://feed',
+              },
               originalUrl: 'https://example.com/article',
             },
             {
@@ -100,9 +102,7 @@ describe('ArticlesService', () => {
       expect.objectContaining({
         categories: [{ id: 'cat_1', name: 'AI infrastructure' }],
         duplicateCount: 1,
-        entities: [
-          { id: 'entity_1', name: 'Microsoft', type: 'COMPANY' },
-        ],
+        entities: [{ id: 'entity_1', name: 'Microsoft', type: 'COMPANY' }],
         id: 'label_1',
         similarCount: 2,
         sourceTitle: 'Primary Feed',
@@ -110,3 +110,17 @@ describe('ArticlesService', () => {
     ]);
   });
 });
+
+interface FindLabelsArgs {
+  orderBy: unknown[];
+  where: {
+    categories: { some: { categoryId: string } };
+    importance: ArticleImportance;
+    status: ArticleProcessingStatus;
+    userId: string;
+    article: {
+      feedItems: { some: { feedId: string; feed: { userId: string } } };
+      publishedAt: { gte: Date };
+    };
+  };
+}

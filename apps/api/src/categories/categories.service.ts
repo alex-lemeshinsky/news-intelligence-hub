@@ -72,11 +72,7 @@ export class CategoriesService {
     }
   }
 
-  async update(
-    userId: string,
-    categoryId: string,
-    input: UpdateCategoryInput,
-  ) {
+  async update(userId: string, categoryId: string, input: UpdateCategoryInput) {
     const category = await this.findOwnedCategory(userId, categoryId);
     const data =
       input.name === undefined ? {} : { name: normalizeName(input.name) };

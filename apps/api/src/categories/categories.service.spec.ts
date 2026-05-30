@@ -3,8 +3,14 @@ import { CategoriesService } from './categories.service';
 
 describe('CategoriesService', () => {
   const createCategory = jest.fn();
-  const createManyCategories = jest.fn();
-  const createManyAxes = jest.fn();
+  const createManyCategories = jest.fn<
+    Promise<{ count: number }>,
+    [CreateManyArgs]
+  >();
+  const createManyAxes = jest.fn<
+    Promise<{ count: number }>,
+    [CreateManyArgs]
+  >();
   const deleteCategory = jest.fn();
   const findCategories = jest.fn();
   const findCategory = jest.fn();
@@ -35,28 +41,31 @@ describe('CategoriesService', () => {
 
     await service.seedDefaultConfiguration('user_1');
 
-    expect(createManyCategories).toHaveBeenCalledWith({
-      data: expect.arrayContaining([
+    const categoryCall = createManyCategories.mock.calls[0]?.[0];
+    const axisCall = createManyAxes.mock.calls[0]?.[0];
+
+    expect(categoryCall?.skipDuplicates).toBe(true);
+    expect(categoryCall?.data).toEqual(
+      expect.arrayContaining([
         { name: 'AI infrastructure', userId: 'user_1' },
         { name: 'Crypto regulation', userId: 'user_1' },
       ]),
-      skipDuplicates: true,
-    });
-    expect(createManyAxes).toHaveBeenCalledWith({
-      data: expect.arrayContaining([
-        expect.objectContaining({
-          name: 'Content type',
-          userId: 'user_1',
-          values: expect.arrayContaining(['Analysis', 'Launch']),
-        }),
-        expect.objectContaining({
-          name: 'Reader level',
-          userId: 'user_1',
-          values: expect.arrayContaining(['Technical', 'Executive']),
-        }),
-      ]),
-      skipDuplicates: true,
-    });
+    );
+    expect(axisCall?.skipDuplicates).toBe(true);
+    const contentType = axisCall?.data.find(
+      (axis) => axis.name === 'Content type',
+    );
+    const readerLevel = axisCall?.data.find(
+      (axis) => axis.name === 'Reader level',
+    );
+    expect(contentType?.userId).toBe('user_1');
+    expect(contentType?.values).toEqual(
+      expect.arrayContaining(['Analysis', 'Launch']),
+    );
+    expect(readerLevel?.userId).toBe('user_1');
+    expect(readerLevel?.values).toEqual(
+      expect.arrayContaining(['Technical', 'Executive']),
+    );
   });
 
   it('lists only categories owned by the current user', async () => {
@@ -94,3 +103,12 @@ describe('CategoriesService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
+
+interface CreateManyArgs {
+  data: Array<{
+    name: string;
+    userId: string;
+    values?: string[];
+  }>;
+  skipDuplicates: boolean;
+}

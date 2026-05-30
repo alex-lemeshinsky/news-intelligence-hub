@@ -11,8 +11,8 @@ import {
 import type { AuthUser } from '../auth/auth.service';
 import { CookieAuthGuard } from '../auth/cookie-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
-import {
-  CategoriesService,
+import { CategoriesService } from './categories.service';
+import type {
   CreateCategoryInput,
   UpdateCategoryInput,
 } from './categories.service';

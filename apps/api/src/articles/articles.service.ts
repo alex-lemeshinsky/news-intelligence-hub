@@ -171,7 +171,8 @@ function mapArticleLabel(label: ArticleLabelRecord) {
   const firstFeedItem = label.article.feedItems[0];
   const duplicateCount = Math.max(label.article.feedItems.length - 1, 0);
   const modelSimilarityCount =
-    label.article.similaritySource.length + label.article.similarityTarget.length;
+    label.article.similaritySource.length +
+    label.article.similarityTarget.length;
 
   return {
     axes: label.axes.map((assignment) => ({
