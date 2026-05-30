@@ -6,9 +6,11 @@ import { ApiError } from "@/lib/api/shared";
 import type {
   ArticleFeedItem,
   ArticleFeedResponse,
+  ArticleImportance,
   Category,
   Feed,
   FeedStatus,
+  ArticleProcessingStatus,
 } from "@/lib/api/types";
 
 interface WorkspaceClientProps {
@@ -26,6 +28,7 @@ export function WorkspaceClient({
   const [categories] = useState(initialCategories);
   const [feeds, setFeeds] = useState(initialFeeds);
   const [feedUrl, setFeedUrl] = useState("");
+  const [filters, setFilters] = useState<ArticleFilters>({});
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,13 +38,34 @@ export function WorkspaceClient({
     [articles],
   );
 
-  async function refreshWorkspace() {
+  async function refreshWorkspace(nextFilters = filters) {
     const [nextFeeds, nextArticles] = await Promise.all([
       browserApiFetch<Feed[]>("/feeds"),
-      browserApiFetch<ArticleFeedResponse>("/articles"),
+      browserApiFetch<ArticleFeedResponse>(articlePath(nextFilters)),
     ]);
     setFeeds(nextFeeds);
     setArticles(nextArticles.items);
+  }
+
+  async function refreshArticles(nextFilters: ArticleFilters) {
+    const nextArticles = await browserApiFetch<ArticleFeedResponse>(
+      articlePath(nextFilters),
+    );
+    setArticles(nextArticles.items);
+  }
+
+  async function updateFilter<K extends keyof ArticleFilters>(
+    key: K,
+    value: ArticleFilters[K],
+  ) {
+    const nextFilters = {
+      ...filters,
+      [key]: value || undefined,
+    };
+    setFilters(nextFilters);
+    await runAction("articles:filter", async () => {
+      await refreshArticles(nextFilters);
+    });
   }
 
   async function createFeed(event: FormEvent<HTMLFormElement>) {
@@ -211,9 +235,23 @@ export function WorkspaceClient({
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 p-5">
-            <h2 className="text-base font-semibold text-slate-950">
-              Article feed
-            </h2>
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold text-slate-950">
+                  Article feed
+                </h2>
+                <span className="text-xs font-medium text-slate-500">
+                  {articles.length} visible
+                </span>
+              </div>
+              <ArticleFiltersBar
+                categories={categories}
+                feeds={feeds}
+                filters={filters}
+                pending={pendingAction === "articles:filter"}
+                onFilterChange={updateFilter}
+              />
+            </div>
           </div>
           <div className="divide-y divide-slate-200">
             {articles.length > 0 ? (
@@ -230,6 +268,14 @@ export function WorkspaceClient({
       </section>
     </main>
   );
+}
+
+interface ArticleFilters {
+  categoryId?: string;
+  feedId?: string;
+  importance?: ArticleImportance;
+  status?: ArticleProcessingStatus;
+  timeWindow?: "24h" | "7d" | "30d";
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
@@ -321,14 +367,197 @@ function ArticleRow({ article }: { article: ArticleFeedItem }) {
             {article.publishedAt ? ` / ${formatDate(article.publishedAt)}` : ""}
           </p>
         </div>
-        <span className="w-fit rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700">
-          {article.status.toLowerCase()}
-        </span>
+        <div className="flex flex-wrap gap-2">
+          <span className={articleStatusClass(article.status)}>
+            {statusLabel(article)}
+          </span>
+          {article.importance ? (
+            <span className={importanceClass(article.importance)}>
+              {article.importance.toLowerCase()}
+            </span>
+          ) : null}
+        </div>
       </div>
-      <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-600">
-        {article.summary ?? "Awaiting processing summary."}
-      </p>
+      {article.summary ? (
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          {article.summary}
+        </p>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-slate-500">
+          {article.preFilterReason
+            ? `Filtered before LLM analysis: ${article.preFilterReason.replace("_", " ")}.`
+            : "Awaiting processing summary."}
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        {article.categories.map((category) => (
+          <span
+            className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700"
+            key={category.id}
+          >
+            {category.name}
+          </span>
+        ))}
+        {article.axes.map((axis) => (
+          <span
+            className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600"
+            key={axis.axisId}
+          >
+            {axis.axisName}: {axis.value}
+          </span>
+        ))}
+      </div>
+      {article.entities.length > 0 ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {article.entities.map((entity) => (
+            <span
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700"
+              key={entity.id}
+            >
+              {entity.name} · {entity.type.toLowerCase()}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+        <div className="flex flex-wrap gap-3">
+          <span>{article.duplicateCount} duplicates</span>
+          <span>{article.similarCount} similar</span>
+        </div>
+        <a
+          className="font-medium text-slate-800 underline underline-offset-2"
+          href={article.originalUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          Original
+        </a>
+      </div>
     </article>
+  );
+}
+
+function ArticleFiltersBar({
+  categories,
+  feeds,
+  filters,
+  onFilterChange,
+  pending,
+}: {
+  categories: Category[];
+  feeds: Feed[];
+  filters: ArticleFilters;
+  onFilterChange: <K extends keyof ArticleFilters>(
+    key: K,
+    value: ArticleFilters[K],
+  ) => Promise<void>;
+  pending: boolean;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-5">
+      <SelectFilter
+        label="Category"
+        value={filters.categoryId ?? ""}
+        disabled={pending}
+        onChange={(value) => onFilterChange("categoryId", value)}
+        options={categories.map((category) => ({
+          label: category.name,
+          value: category.id,
+        }))}
+      />
+      <SelectFilter
+        label="Feed"
+        value={filters.feedId ?? ""}
+        disabled={pending}
+        onChange={(value) => onFilterChange("feedId", value)}
+        options={feeds.map((feed) => ({
+          label: feed.title ?? feed.url,
+          value: feed.id,
+        }))}
+      />
+      <SelectFilter
+        label="Importance"
+        value={filters.importance ?? ""}
+        disabled={pending}
+        onChange={(value) =>
+          onFilterChange("importance", value as ArticleImportance | undefined)
+        }
+        options={[
+          { label: "High", value: "HIGH" },
+          { label: "Normal", value: "NORMAL" },
+          { label: "Junk", value: "JUNK" },
+        ]}
+      />
+      <SelectFilter
+        label="State"
+        value={filters.status ?? ""}
+        disabled={pending}
+        onChange={(value) =>
+          onFilterChange(
+            "status",
+            value as ArticleProcessingStatus | undefined,
+          )
+        }
+        options={[
+          { label: "Pending", value: "PENDING" },
+          { label: "Filtered", value: "FILTERED" },
+          { label: "Processed", value: "PROCESSED" },
+          { label: "Failed", value: "FAILED" },
+        ]}
+      />
+      <SelectFilter
+        label="Period"
+        value={filters.timeWindow ?? ""}
+        disabled={pending}
+        onChange={(value) =>
+          onFilterChange(
+            "timeWindow",
+            value as ArticleFilters["timeWindow"] | undefined,
+          )
+        }
+        options={[
+          { label: "Last 24h", value: "24h" },
+          { label: "Last 7d", value: "7d" },
+          { label: "Last 30d", value: "30d" },
+        ]}
+      />
+    </div>
+  );
+}
+
+function SelectFilter({
+  disabled,
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  disabled: boolean;
+  label: string;
+  onChange: (value: string | undefined) => void;
+  options: Array<{
+    label: string;
+    value: string;
+  }>;
+  value: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-600">{label}</span>
+      <select
+        className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:text-slate-400"
+        disabled={disabled}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value || undefined)}
+      >
+        <option value="">All</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -349,4 +578,48 @@ function formatDate(value: string): string {
     month: "short",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function articlePath(filters: ArticleFilters): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) {
+      params.set(key, value);
+    }
+  }
+
+  const query = params.toString();
+  return query ? `/articles?${query}` : "/articles";
+}
+
+function articleStatusClass(status: ArticleProcessingStatus): string {
+  const base = "w-fit rounded-md px-2 py-1 text-xs font-medium";
+  if (status === "PROCESSED") {
+    return `${base} bg-emerald-50 text-emerald-700`;
+  }
+  if (status === "FILTERED") {
+    return `${base} bg-amber-50 text-amber-700`;
+  }
+  if (status === "FAILED") {
+    return `${base} bg-red-50 text-red-700`;
+  }
+  return `${base} bg-slate-100 text-slate-600`;
+}
+
+function importanceClass(importance: ArticleImportance): string {
+  const base = "w-fit rounded-md border px-2 py-1 text-xs font-medium";
+  if (importance === "HIGH") {
+    return `${base} border-blue-200 bg-blue-50 text-blue-700`;
+  }
+  if (importance === "JUNK") {
+    return `${base} border-slate-300 bg-white text-slate-500`;
+  }
+  return `${base} border-slate-200 bg-white text-slate-700`;
+}
+
+function statusLabel(article: ArticleFeedItem): string {
+  if (article.status === "FILTERED") {
+    return "pre-filtered";
+  }
+  return article.status.toLowerCase();
 }
