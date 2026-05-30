@@ -12,7 +12,7 @@
     "start": "node dist/main.js",
     "prelint": "npm --prefix ../../packages/shared run build && npm --prefix ../../packages/database run build",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/**/*.spec.ts"
+    "test": "tsx --test src/*.spec.ts"
   },
   "dependencies": {
     "@nih/database": "file:../../packages/database",
