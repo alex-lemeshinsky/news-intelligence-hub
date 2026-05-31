@@ -573,9 +573,10 @@ function statusClass(status: FeedStatus): string {
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     day: "2-digit",
     month: "short",
+    timeZone: "UTC",
     year: "numeric",
   }).format(new Date(value));
 }
