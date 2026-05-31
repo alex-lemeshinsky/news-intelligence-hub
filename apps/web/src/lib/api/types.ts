@@ -81,3 +81,54 @@ export interface ArticleFeedItem {
 export interface ArticleFeedResponse {
   items: ArticleFeedItem[];
 }
+
+export type GraphNodeKind = "article" | "entity";
+
+export type GraphEdgeKind = "mentions" | "co_mention" | "similar";
+
+export interface GraphArticleNode {
+  articleId: string;
+  articleLabelId: string;
+  categories: Array<{
+    id: string;
+    name: string;
+  }>;
+  id: string;
+  importance: ArticleImportance | null;
+  kind: "article";
+  label: string;
+  publishedAt: string | null;
+  summary: string | null;
+  timestamp: number | null;
+}
+
+export interface GraphEntityNode {
+  aliases: string[];
+  articleCount: number;
+  description: string | null;
+  entityId: string;
+  entityType: string;
+  firstSeen: number | null;
+  id: string;
+  kind: "entity";
+  label: string;
+  lastSeen: number | null;
+}
+
+export type GraphNode = GraphArticleNode | GraphEntityNode;
+
+export interface GraphEdge {
+  categoryId: string | null;
+  edgeId: string;
+  fromNodeId: string;
+  kind: GraphEdgeKind;
+  score: number | null;
+  timestamp: number | null;
+  toNodeId: string;
+  weight: number | null;
+}
+
+export interface GraphResponse {
+  edges: GraphEdge[];
+  nodes: GraphNode[];
+}
