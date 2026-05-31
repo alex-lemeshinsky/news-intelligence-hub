@@ -26,6 +26,7 @@
     "test:e2e:api": "npm --prefix apps/api run test:e2e",
     "db:generate": "npm --prefix packages/database run generate",
     "db:migrate": "npm --prefix packages/database run migrate",
+    "db:deploy": "npm --prefix packages/database run deploy",
     "db:studio": "npm --prefix packages/database run studio"
   },
   "workspaces": [

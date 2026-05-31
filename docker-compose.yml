@@ -1,3 +1,15 @@
+# Development / debug flow: runs ONLY the backing services (Postgres + Redis).
+# The API, worker, and web run on the host with hot reload:
+#
+#   docker compose up -d            # start Postgres + Redis
+#   cp .env.example .env            # the localhost URLs in .env target these
+#   npm install
+#   npm run dev:api                 # http://localhost:3001
+#   npm run dev:web                 # http://localhost:3000
+#   npm run dev:worker
+#
+# For a fully containerized one-command startup, use docker-compose.full.yml.
+
 services:
   postgres:
     image: postgres:16-alpine

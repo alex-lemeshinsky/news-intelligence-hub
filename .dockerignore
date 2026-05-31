@@ -1,0 +1,21 @@
+# Keep the Docker build context small and never ship host artifacts into the image.
+# node_modules is reinstalled inside the image; dist/.next are rebuilt there.
+**/node_modules
+**/dist
+**/build
+**/.next
+**/coverage
+
+.git
+.github
+.vscode
+.idea
+
+# Secrets and local-only files must not enter the image.
+.env
+.env.*
+!.env.example
+
+**/*.log
+.DS_Store
+.tmp
