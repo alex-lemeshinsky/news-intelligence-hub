@@ -49,6 +49,20 @@ export interface ClassificationAxis {
   updatedAt: string;
 }
 
+export type BackgroundStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+
+export interface RegenerationRun {
+  id: string;
+  userId: string;
+  status: BackgroundStatus;
+  total: number;
+  processed: number;
+  failed: number;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ArticleProcessingStatus =
   | "PENDING"
   | "FILTERED"

@@ -1,9 +1,12 @@
 import { serverApiFetch } from "@/lib/api/server";
-import type { ClassificationAxis } from "@/lib/api/types";
+import type { ClassificationAxis, RegenerationRun } from "@/lib/api/types";
 import { SettingsClient } from "./settings-client";
 
 export default async function SettingsPage() {
-  const axes = await serverApiFetch<ClassificationAxis[]>("/axes");
+  const [axes, latestRun] = await Promise.all([
+    serverApiFetch<ClassificationAxis[]>("/axes"),
+    serverApiFetch<RegenerationRun | null>("/axes/regeneration-runs/latest"),
+  ]);
 
-  return <SettingsClient initialAxes={axes} />;
+  return <SettingsClient initialAxes={axes} initialRun={latestRun} />;
 }

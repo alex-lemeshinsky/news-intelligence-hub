@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { browserApiFetch } from "@/lib/api/browser";
 import { ApiError } from "@/lib/api/shared";
-import type { ClassificationAxis } from "@/lib/api/types";
+import type { ClassificationAxis, RegenerationRun } from "@/lib/api/types";
 
 interface SettingsClientProps {
   initialAxes: ClassificationAxis[];
+  initialRun: RegenerationRun | null;
 }
 
 interface AxisDraft {
@@ -14,8 +15,12 @@ interface AxisDraft {
   valuesText: string;
 }
 
-export function SettingsClient({ initialAxes }: SettingsClientProps) {
+export function SettingsClient({
+  initialAxes,
+  initialRun,
+}: SettingsClientProps) {
   const [axes, setAxes] = useState(initialAxes);
+  const [latestRun, setLatestRun] = useState(initialRun);
   const [drafts, setDrafts] = useState(() => buildDrafts(initialAxes));
   const [newAxis, setNewAxis] = useState<AxisDraft>({
     name: "",
@@ -28,12 +33,33 @@ export function SettingsClient({ initialAxes }: SettingsClientProps) {
     () => axes.reduce((total, axis) => total + axis.values.length, 0),
     [axes],
   );
+  const regenerationActive =
+    latestRun?.status === "PENDING" || latestRun?.status === "RUNNING";
 
   async function refreshAxes() {
     const nextAxes = await browserApiFetch<ClassificationAxis[]>("/axes");
     setAxes(nextAxes);
     setDrafts(buildDrafts(nextAxes));
   }
+
+  async function refreshLatestRun() {
+    const run = await browserApiFetch<RegenerationRun | null>(
+      "/axes/regeneration-runs/latest",
+    );
+    setLatestRun(run);
+  }
+
+  useEffect(() => {
+    if (!regenerationActive) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshLatestRun();
+    }, 2500);
+
+    return () => window.clearInterval(intervalId);
+  }, [regenerationActive, latestRun?.id]);
 
   async function createAxis(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,6 +103,19 @@ export function SettingsClient({ initialAxes }: SettingsClientProps) {
       });
       setNotice("Axis deleted.");
       await refreshAxes();
+    });
+  }
+
+  async function startRegeneration() {
+    await runAction("regeneration:start", async () => {
+      const run = await browserApiFetch<RegenerationRun>(
+        "/axes/regeneration-runs",
+        {
+          method: "POST",
+        },
+      );
+      setLatestRun(run);
+      setNotice("Regeneration queued.");
     });
   }
 
@@ -180,6 +219,11 @@ export function SettingsClient({ initialAxes }: SettingsClientProps) {
               {pendingAction === "axis:create" ? "Adding" : "Add axis"}
             </button>
           </form>
+          <RegenerationPanel
+            latestRun={latestRun}
+            pending={pendingAction === "regeneration:start"}
+            onStart={startRegeneration}
+          />
         </aside>
       </section>
     </main>
@@ -263,6 +307,76 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function RegenerationPanel({
+  latestRun,
+  onStart,
+  pending,
+}: {
+  latestRun: RegenerationRun | null;
+  onStart: () => Promise<void>;
+  pending: boolean;
+}) {
+  const completed = latestRun
+    ? latestRun.processed + latestRun.failed
+    : 0;
+  const progress =
+    latestRun && latestRun.total > 0
+      ? Math.round((completed / latestRun.total) * 100)
+      : latestRun?.status === "COMPLETED"
+        ? 100
+        : 0;
+
+  return (
+    <section className="mt-6 border-t border-slate-200 pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-slate-950">
+          Regeneration
+        </h2>
+        {latestRun ? (
+          <span className={runStatusClass(latestRun.status)}>
+            {latestRun.status.toLowerCase()}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-emerald-600 transition-all"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <ProgressMetric label="Total" value={latestRun?.total ?? 0} />
+        <ProgressMetric label="Done" value={latestRun?.processed ?? 0} />
+        <ProgressMetric label="Failed" value={latestRun?.failed ?? 0} />
+      </div>
+      {latestRun?.error ? (
+        <p className="mt-3 rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">
+          {latestRun.error}
+        </p>
+      ) : null}
+      <button
+        className="mt-4 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+        disabled={pending || latestRun?.status === "PENDING" || latestRun?.status === "RUNNING"}
+        type="button"
+        onClick={() => void onStart()}
+      >
+        {pending ? "Queueing" : "Regenerate labels"}
+      </button>
+    </section>
+  );
+}
+
+function ProgressMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-2">
+      <p className="text-base font-semibold leading-none text-slate-950">
+        {value}
+      </p>
+      <p className="mt-1 text-xs font-medium text-slate-500">{label}</p>
+    </div>
+  );
+}
+
 function TextInput({
   label,
   onChange,
@@ -323,4 +437,18 @@ function parseValues(valuesText: string): string[] {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+}
+
+function runStatusClass(status: RegenerationRun["status"]): string {
+  const base = "rounded-md px-2 py-1 text-xs font-medium";
+  if (status === "COMPLETED") {
+    return `${base} bg-emerald-50 text-emerald-700`;
+  }
+  if (status === "FAILED") {
+    return `${base} bg-red-50 text-red-700`;
+  }
+  if (status === "RUNNING") {
+    return `${base} bg-blue-50 text-blue-700`;
+  }
+  return `${base} bg-slate-100 text-slate-600`;
 }
