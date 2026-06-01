@@ -216,6 +216,39 @@ describe('AxesService', () => {
     });
   });
 
+  it('marks a regeneration run failed when enqueueing work fails', async () => {
+    const queueError = new Error('Redis connection lost');
+    countLabels.mockResolvedValue(2);
+    createRun.mockResolvedValue({
+      id: 'run_1',
+      userId: 'user_1',
+      total: 2,
+      processed: 0,
+      failed: 0,
+      status: 'PENDING',
+    });
+    enqueue.mockRejectedValue(queueError);
+    updateRun.mockResolvedValue({
+      id: 'run_1',
+      status: 'FAILED',
+      total: 2,
+      userId: 'user_1',
+    });
+    const service = new AxesService(database as never, queues as never);
+
+    await expect(service.startRegeneration('user_1')).rejects.toThrow(
+      queueError,
+    );
+
+    expect(updateRun).toHaveBeenCalledWith({
+      data: {
+        error: 'Redis connection lost',
+        status: 'FAILED',
+      },
+      where: { id: 'run_1' },
+    });
+  });
+
   it('reads the latest regeneration run for the current user', async () => {
     findLatestRun.mockResolvedValue({ id: 'run_1', userId: 'user_1' });
     const service = new AxesService(database as never, queues as never);

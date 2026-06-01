@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ArticleProcessingStatus } from '@prisma/client';
+import { ArticleProcessingStatus, BackgroundStatus } from '@prisma/client';
 import { JOB_NAMES, QUEUE_NAMES } from '@nih/shared';
 import { DatabaseService } from '../database/database.service';
 import { QueuesService } from '../queues/queues.service';
@@ -110,11 +110,22 @@ export class AxesService {
       runId: run.id,
       userId,
     };
-    await this.queues.enqueue(
-      QUEUE_NAMES.regeneration,
-      JOB_NAMES.regenerateArticles,
-      payload,
-    );
+    try {
+      await this.queues.enqueue(
+        QUEUE_NAMES.regeneration,
+        JOB_NAMES.regenerateArticles,
+        payload,
+      );
+    } catch (error) {
+      await this.database.regenerationRun.update({
+        data: {
+          error: getErrorMessage(error),
+          status: BackgroundStatus.FAILED,
+        },
+        where: { id: run.id },
+      });
+      throw error;
+    }
 
     return run;
   }
@@ -182,4 +193,8 @@ function isUniqueConstraintError(error: unknown): boolean {
     'code' in error &&
     error.code === 'P2002'
   );
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Queue enqueue failed.';
 }
