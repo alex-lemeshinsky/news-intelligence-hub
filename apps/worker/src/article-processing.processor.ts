@@ -88,6 +88,7 @@ interface ArticleLabelPointerRecord {
 }
 
 interface RegenerationRunRecord {
+  articleLabelIds: string[];
   id: string;
   userId: string;
 }
@@ -164,9 +165,12 @@ export async function processRegenerationJob(
     return;
   }
 
-  await dependencies.database.regenerationRun.update({
-    data: { status: BackgroundStatus.RUNNING },
-    where: { id: run.id },
+  let processed = 0;
+  let failed = 0;
+  await updateRegenerationProgress(dependencies.database, run.id, {
+    failed,
+    processed,
+    status: BackgroundStatus.RUNNING,
   });
 
   const labels = await dependencies.database.articleLabel.findMany({
@@ -174,13 +178,22 @@ export async function processRegenerationJob(
       articleId: true,
       id: true,
     },
-    where: buildRegenerationLabelWhere(payload.userId),
+    where: {
+      id: { in: run.articleLabelIds },
+      userId: payload.userId,
+    },
   });
-  let failed = 0;
+  failed = run.articleLabelIds.length - labels.length;
+  if (failed > 0) {
+    await updateRegenerationProgress(dependencies.database, run.id, {
+      failed,
+      processed,
+    });
+  }
 
   for (const label of labels) {
     try {
-      const processed = await processArticleLabel(
+      const wasProcessed = await processArticleLabel(
         dependencies,
         {
           articleId: label.articleId,
@@ -198,27 +211,45 @@ export async function processRegenerationJob(
         },
       );
 
-      if (processed) {
-        await dependencies.database.regenerationRun.update({
-          data: { processed: { increment: 1 } },
-          where: { id: run.id },
-        });
+      if (wasProcessed) {
+        processed += 1;
+      } else {
+        failed += 1;
       }
     } catch {
       failed += 1;
-      await dependencies.database.regenerationRun.update({
-        data: { failed: { increment: 1 } },
-        where: { id: run.id },
-      });
     }
+
+    await updateRegenerationProgress(dependencies.database, run.id, {
+      failed,
+      processed,
+    });
   }
 
-  await dependencies.database.regenerationRun.update({
+  await updateRegenerationProgress(dependencies.database, run.id, {
+    failed,
+    processed,
+    status:
+      failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
+  });
+}
+
+async function updateRegenerationProgress(
+  database: ArticleProcessingDatabase,
+  runId: string,
+  progress: {
+    failed: number;
+    processed: number;
+    status?: BackgroundStatus;
+  },
+): Promise<void> {
+  await database.regenerationRun.update({
     data: {
-      status:
-        failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
+      failed: progress.failed,
+      processed: progress.processed,
+      ...(progress.status === undefined ? {} : { status: progress.status }),
     },
-    where: { id: run.id },
+    where: { id: runId },
   });
 }
 
@@ -819,15 +850,6 @@ function buildCacheKey(
     )
     .digest('hex');
   return `${operation}:${contentHash}:${configurationHash}`;
-}
-
-function buildRegenerationLabelWhere(userId: string) {
-  return {
-    status: {
-      in: [ArticleProcessingStatus.PROCESSED, ArticleProcessingStatus.FAILED],
-    },
-    userId,
-  };
 }
 
 function mergeAliases(

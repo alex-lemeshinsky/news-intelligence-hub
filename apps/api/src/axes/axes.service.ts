@@ -89,17 +89,21 @@ export class AxesService {
   }
 
   async startRegeneration(userId: string) {
-    const total = await this.database.articleLabel.count({
+    const labels = await this.database.articleLabel.findMany({
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
       where: buildRegenerationLabelWhere(userId),
     });
+    const articleLabelIds = labels.map((label) => label.id);
     const run = await this.database.regenerationRun.create({
       data: {
+        articleLabelIds,
         userId,
-        total,
+        total: articleLabelIds.length,
       },
     });
 
-    if (total === 0) {
+    if (articleLabelIds.length === 0) {
       return this.database.regenerationRun.update({
         data: { status: 'COMPLETED' },
         where: { id: run.id },

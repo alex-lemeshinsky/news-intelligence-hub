@@ -228,7 +228,65 @@ describe('processRegenerationJob', () => {
     assert.ok(calls.includes('regenerationRun.update:RUNNING'));
     assert.ok(calls.includes('llmCache.create:ARTICLE_ANALYSIS'));
     assert.ok(calls.includes('llmTelemetry.create:REGENERATION:true:140'));
-    assert.ok(calls.includes('regenerationRun.update:processed'));
+    assert.ok(calls.includes('regenerationRun.update:progress:1:0'));
+    assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
+  });
+
+  it('uses the stored run snapshot and absolute progress during regeneration', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      articleLabelRows: [
+        {
+          articleId: 'article_1',
+          id: 'label_1',
+          status: 'PROCESSED',
+        },
+        {
+          articleId: 'article_late',
+          id: 'label_late',
+          status: 'PROCESSED',
+        },
+      ],
+      regenerationRunArticleLabelIds: ['label_1'],
+    });
+
+    await processRegenerationJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            return {
+              latencyMs: 12,
+              model: 'test-model',
+              provider: 'OPENAI',
+              result: {
+                axes: [],
+                categories: [],
+                entities: [],
+                importance: 'NORMAL',
+                summary: 'Snapshot regeneration summary.',
+              },
+              usage: {
+                completionTokens: 4,
+                promptTokens: 8,
+                totalTokens: 12,
+              },
+            };
+          },
+        },
+      },
+      {
+        runId: 'run_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.ok(calls.includes('articleLabel.findMany:snapshot:label_1'));
+    assert.ok(!calls.includes('articleLabel.findMany:live'));
+    assert.ok(!calls.includes('articleLabel.findFirst:label_late'));
+    assert.ok(calls.includes('regenerationRun.update:progress:0:0'));
+    assert.ok(calls.includes('regenerationRun.update:progress:1:0'));
+    assert.ok(!calls.includes('regenerationRun.update:processed'));
     assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
   });
 
@@ -265,6 +323,7 @@ describe('processRegenerationJob', () => {
     assert.equal(llmCalls, 0);
     assert.ok(calls.includes('llmCache.findUnique:ARTICLE_ANALYSIS:hit'));
     assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
+    assert.ok(calls.includes('regenerationRun.update:progress:1:0'));
     assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
   });
 
@@ -307,7 +366,7 @@ describe('processRegenerationJob', () => {
 
     assert.ok(!calls.includes('articleLabel.update:FAILED'));
     assert.ok(calls.includes('llmTelemetry.create:REGENERATION:false:12'));
-    assert.ok(calls.includes('regenerationRun.update:failed'));
+    assert.ok(calls.includes('regenerationRun.update:progress:0:1'));
     assert.ok(calls.includes('regenerationRun.update:FAILED'));
   });
 
@@ -375,15 +434,30 @@ describe('processRegenerationJob', () => {
 });
 
 interface DatabaseDoubleOptions {
+  articleLabelRows?: ArticleLabelRow[];
   cachedResponse?: unknown;
   existingMentions?: string[];
   labelStatus?: string;
+  regenerationRunArticleLabelIds?: string[];
+}
+
+interface ArticleLabelRow {
+  articleId: string;
+  id: string;
+  status?: string;
 }
 
 function createArticleProcessingDatabaseDouble(
   calls: string[],
   options: DatabaseDoubleOptions = {},
 ) {
+  const articleLabelRows = options.articleLabelRows ?? [
+    {
+      articleId: 'article_1',
+      id: 'label_1',
+      status: options.labelStatus ?? 'PENDING',
+    },
+  ];
   const entityIds = new Map<string, string>();
   const mentionRecords: Array<{
     articleLabelId: string;
@@ -401,28 +475,44 @@ function createArticleProcessingDatabaseDouble(
 
   return {
     articleLabel: {
-      async findMany() {
+      async findMany(args?: { where?: { id?: { in?: string[] } } }) {
+        const snapshotIds = args?.where?.id?.in;
+        calls.push(
+          snapshotIds
+            ? `articleLabel.findMany:snapshot:${snapshotIds.join(',')}`
+            : 'articleLabel.findMany:live',
+        );
         calls.push('articleLabel.findMany');
-        return [
-          {
-            articleId: 'article_1',
-            id: 'label_1',
-          },
-        ];
+        return articleLabelRows
+          .filter((label) => !snapshotIds || snapshotIds.includes(label.id))
+          .map((label) => ({
+            articleId: label.articleId,
+            id: label.id,
+          }));
       },
-      async findFirst() {
+      async findFirst(args: { where: { articleId: string; id: string } }) {
+        calls.push(`articleLabel.findFirst:${args.where.id}`);
         calls.push('articleLabel.findFirst');
+        const label = articleLabelRows.find(
+          (row) =>
+            row.id === args.where.id &&
+            row.articleId === args.where.articleId,
+        );
+        if (!label) {
+          return null;
+        }
+
         return {
           article: {
-            contentHash: 'hash_1',
+            contentHash: `hash_${label.id}`,
             extractedText: 'Microsoft announced Azure AI runtime updates.'.repeat(20),
-            id: 'article_1',
+            id: label.articleId,
             publishedAt: new Date('2026-05-27T10:00:00.000Z'),
             title: 'Microsoft ships a new AI runtime',
           },
-          articleId: 'article_1',
-          id: 'label_1',
-          status: options.labelStatus ?? 'PENDING',
+          articleId: label.articleId,
+          id: label.id,
+          status: label.status ?? options.labelStatus ?? 'PENDING',
           userId: 'user_1',
         };
       },
@@ -612,21 +702,35 @@ function createArticleProcessingDatabaseDouble(
       async findFirst(args: { where: { id: string } }) {
         calls.push(`regenerationRun.findFirst:${args.where.id}`);
         return {
+          articleLabelIds:
+            options.regenerationRunArticleLabelIds ??
+            articleLabelRows.map((label) => label.id),
           id: args.where.id,
           userId: 'user_1',
         };
       },
       async update(args: {
         data: {
-          failed?: { increment: number };
-          processed?: { increment: number };
+          failed?: number | { increment: number };
+          processed?: number | { increment: number };
           status?: string;
         };
       }) {
-        if (args.data.processed) {
+        if (
+          typeof args.data.processed === 'number' ||
+          typeof args.data.failed === 'number'
+        ) {
+          calls.push(
+            `regenerationRun.update:progress:${args.data.processed ?? 'same'}:${args.data.failed ?? 'same'}`,
+          );
+        }
+        if (
+          args.data.processed &&
+          typeof args.data.processed !== 'number'
+        ) {
           calls.push('regenerationRun.update:processed');
         }
-        if (args.data.failed) {
+        if (args.data.failed && typeof args.data.failed !== 'number') {
           calls.push('regenerationRun.update:failed');
         }
         if (args.data.status) {

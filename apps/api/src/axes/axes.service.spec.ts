@@ -4,10 +4,10 @@ import { JOB_NAMES, QUEUE_NAMES } from '@nih/shared';
 import { AxesService } from './axes.service';
 
 describe('AxesService', () => {
-  const countLabels = jest.fn();
   const createAxis = jest.fn();
   const createRun = jest.fn();
   const deleteAxis = jest.fn();
+  const findRegenerationLabels = jest.fn();
   const findAxes = jest.fn();
   const findAxis = jest.fn();
   const findLatestRun = jest.fn();
@@ -17,7 +17,7 @@ describe('AxesService', () => {
 
   const database = {
     articleLabel: {
-      count: countLabels,
+      findMany: findRegenerationLabels,
     },
     classificationAxis: {
       create: createAxis,
@@ -143,7 +143,11 @@ describe('AxesService', () => {
   });
 
   it('starts a regeneration run for processable labels and enqueues the worker', async () => {
-    countLabels.mockResolvedValue(3);
+    findRegenerationLabels.mockResolvedValue([
+      { id: 'label_1' },
+      { id: 'label_2' },
+      { id: 'label_3' },
+    ]);
     createRun.mockResolvedValue({
       id: 'run_1',
       userId: 'user_1',
@@ -157,7 +161,9 @@ describe('AxesService', () => {
 
     const result = await service.startRegeneration('user_1');
 
-    expect(countLabels).toHaveBeenCalledWith({
+    expect(findRegenerationLabels).toHaveBeenCalledWith({
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
       where: {
         status: {
           in: [
@@ -170,6 +176,7 @@ describe('AxesService', () => {
     });
     expect(createRun).toHaveBeenCalledWith({
       data: {
+        articleLabelIds: ['label_1', 'label_2', 'label_3'],
         userId: 'user_1',
         total: 3,
       },
@@ -193,7 +200,7 @@ describe('AxesService', () => {
   });
 
   it('completes an empty regeneration run without queueing work', async () => {
-    countLabels.mockResolvedValue(0);
+    findRegenerationLabels.mockResolvedValue([]);
     createRun.mockResolvedValue({
       id: 'run_empty',
       total: 0,
@@ -209,6 +216,13 @@ describe('AxesService', () => {
 
     await service.startRegeneration('user_1');
 
+    expect(createRun).toHaveBeenCalledWith({
+      data: {
+        articleLabelIds: [],
+        total: 0,
+        userId: 'user_1',
+      },
+    });
     expect(enqueue).not.toHaveBeenCalled();
     expect(updateRun).toHaveBeenCalledWith({
       data: { status: 'COMPLETED' },
@@ -218,7 +232,10 @@ describe('AxesService', () => {
 
   it('marks a regeneration run failed when enqueueing work fails', async () => {
     const queueError = new Error('Redis connection lost');
-    countLabels.mockResolvedValue(2);
+    findRegenerationLabels.mockResolvedValue([
+      { id: 'label_1' },
+      { id: 'label_2' },
+    ]);
     createRun.mockResolvedValue({
       id: 'run_1',
       userId: 'user_1',
