@@ -42,4 +42,14 @@ export class AxesController {
   remove(@CurrentUser() user: AuthUser, @Param('id') axisId: string) {
     return this.axesService.remove(user.id, axisId);
   }
+
+  @Get('regeneration-runs/latest')
+  getLatestRegenerationRun(@CurrentUser() user: AuthUser) {
+    return this.axesService.getLatestRegenerationRun(user.id);
+  }
+
+  @Post('regeneration-runs')
+  startRegeneration(@CurrentUser() user: AuthUser) {
+    return this.axesService.startRegeneration(user.id);
+  }
 }

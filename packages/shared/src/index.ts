@@ -27,6 +27,11 @@ export interface ArticleProcessingJobData {
   userId: string;
 }
 
+export interface RegenerationJobData {
+  runId: string;
+  userId: string;
+}
+
 export const ENTITY_TYPES = [
   'person',
   'company',

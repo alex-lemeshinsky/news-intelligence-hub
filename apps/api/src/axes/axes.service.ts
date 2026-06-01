@@ -4,7 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ArticleProcessingStatus } from '@prisma/client';
+import { JOB_NAMES, QUEUE_NAMES } from '@nih/shared';
 import { DatabaseService } from '../database/database.service';
+import { QueuesService } from '../queues/queues.service';
 
 export interface CreateAxisInput {
   name: string;
@@ -18,7 +21,10 @@ export interface UpdateAxisInput {
 
 @Injectable()
 export class AxesService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly queues: QueuesService,
+  ) {}
 
   list(userId: string) {
     return this.database.classificationAxis.findMany({
@@ -75,6 +81,44 @@ export class AxesService {
     });
   }
 
+  getLatestRegenerationRun(userId: string) {
+    return this.database.regenerationRun.findFirst({
+      orderBy: { createdAt: 'desc' },
+      where: { userId },
+    });
+  }
+
+  async startRegeneration(userId: string) {
+    const total = await this.database.articleLabel.count({
+      where: buildRegenerationLabelWhere(userId),
+    });
+    const run = await this.database.regenerationRun.create({
+      data: {
+        userId,
+        total,
+      },
+    });
+
+    if (total === 0) {
+      return this.database.regenerationRun.update({
+        data: { status: 'COMPLETED' },
+        where: { id: run.id },
+      });
+    }
+
+    const payload = {
+      runId: run.id,
+      userId,
+    };
+    await this.queues.enqueue(
+      QUEUE_NAMES.regeneration,
+      JOB_NAMES.regenerateArticles,
+      payload,
+    );
+
+    return run;
+  }
+
   private async findOwnedAxis(userId: string, axisId: string) {
     const axis = await this.database.classificationAxis.findFirst({
       where: {
@@ -120,6 +164,15 @@ function normalizeValues(values: string[]): string[] {
   }
 
   return normalizedValues;
+}
+
+function buildRegenerationLabelWhere(userId: string) {
+  return {
+    status: {
+      in: [ArticleProcessingStatus.PROCESSED, ArticleProcessingStatus.FAILED],
+    },
+    userId,
+  };
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
