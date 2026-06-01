@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { ArticleProcessingJobData } from '@nih/shared';
+import { ArticleProcessingJobData, RegenerationJobData } from '@nih/shared';
 import {
   ArticleAnalysis,
   ArticleAnalysisEntity,
@@ -9,6 +9,7 @@ import {
 } from './llm-client.js';
 import {
   ArticleProcessingStatus,
+  BackgroundStatus,
   GraphEdgeKind,
   LlmOperation,
   LlmProvider,
@@ -35,6 +36,7 @@ export interface ArticleProcessingDatabase {
   };
   articleLabel: {
     findFirst(args: Record<string, unknown>): Promise<ArticleLabelRecord | null>;
+    findMany(args: Record<string, unknown>): Promise<ArticleLabelPointerRecord[]>;
     update(args: Record<string, unknown>): Promise<unknown>;
   };
   category: {
@@ -49,6 +51,8 @@ export interface ArticleProcessingDatabase {
     update(args: Record<string, unknown>): Promise<EntityRecord>;
   };
   graphEdge: {
+    deleteMany(args: Record<string, unknown>): Promise<unknown>;
+    updateMany(args: Record<string, unknown>): Promise<unknown>;
     upsert(args: Record<string, unknown>): Promise<unknown>;
   };
   llmCache: {
@@ -57,6 +61,10 @@ export interface ArticleProcessingDatabase {
   };
   llmTelemetry: {
     create(args: Record<string, unknown>): Promise<unknown>;
+  };
+  regenerationRun: {
+    findFirst(args: Record<string, unknown>): Promise<RegenerationRunRecord | null>;
+    update(args: Record<string, unknown>): Promise<unknown>;
   };
 }
 
@@ -71,6 +79,17 @@ interface ArticleLabelRecord {
   articleId: string;
   id: string;
   status: string;
+  userId: string;
+}
+
+interface ArticleLabelPointerRecord {
+  articleId: string;
+  id: string;
+}
+
+interface RegenerationRunRecord {
+  articleLabelIds: string[];
+  id: string;
   userId: string;
 }
 
@@ -112,6 +131,7 @@ interface PersistedAnalysisContext {
   assignedCategoryIds: string[];
   entities: EntityRecord[];
   label: ArticleLabelRecord;
+  previousMentionEntityIds: string[];
   result: ArticleAnalysis;
 }
 
@@ -119,9 +139,158 @@ export async function processArticleJob(
   dependencies: ArticleProcessingDependencies,
   payload: ArticleProcessingJobData,
 ): Promise<void> {
-  const label = await findProcessableLabel(dependencies.database, payload);
-  if (!label) {
+  await processArticleLabel(dependencies, payload, {
+    allowedStatuses: [
+      ArticleProcessingStatus.PENDING,
+      ArticleProcessingStatus.FAILED,
+    ],
+    cacheOperation: LlmOperation.ARTICLE_ANALYSIS,
+    markLabelFailedOnError: true,
+    operation: LlmOperation.ARTICLE_ANALYSIS,
+  });
+}
+
+export async function processRegenerationJob(
+  dependencies: ArticleProcessingDependencies,
+  payload: RegenerationJobData,
+): Promise<void> {
+  const run = await dependencies.database.regenerationRun.findFirst({
+    where: {
+      id: payload.runId,
+      userId: payload.userId,
+    },
+  });
+
+  if (!run) {
     return;
+  }
+
+  try {
+    let processed = 0;
+    let failed = 0;
+    await updateRegenerationProgress(dependencies.database, run.id, {
+      failed,
+      processed,
+      status: BackgroundStatus.RUNNING,
+    });
+
+    const labels = await dependencies.database.articleLabel.findMany({
+      select: {
+        articleId: true,
+        id: true,
+      },
+      where: {
+        id: { in: run.articleLabelIds },
+        userId: payload.userId,
+      },
+    });
+    failed = run.articleLabelIds.length - labels.length;
+    if (failed > 0) {
+      await updateRegenerationProgress(dependencies.database, run.id, {
+        failed,
+        processed,
+      });
+    }
+
+    for (const label of labels) {
+      try {
+        const wasProcessed = await processArticleLabel(
+          dependencies,
+          {
+            articleId: label.articleId,
+            articleLabelId: label.id,
+            userId: payload.userId,
+          },
+          {
+            allowedStatuses: [
+              ArticleProcessingStatus.PROCESSED,
+              ArticleProcessingStatus.FAILED,
+            ],
+            cacheOperation: LlmOperation.ARTICLE_ANALYSIS,
+            markLabelFailedOnError: false,
+            operation: LlmOperation.REGENERATION,
+          },
+        );
+
+        if (wasProcessed) {
+          processed += 1;
+        } else {
+          failed += 1;
+        }
+      } catch {
+        failed += 1;
+      }
+
+      await updateRegenerationProgress(dependencies.database, run.id, {
+        failed,
+        processed,
+      });
+    }
+
+    await updateRegenerationProgress(dependencies.database, run.id, {
+      failed,
+      processed,
+      status:
+        failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
+    });
+  } catch (error) {
+    await markRegenerationRunFailed(dependencies.database, run.id, error);
+    throw error;
+  }
+}
+
+async function updateRegenerationProgress(
+  database: ArticleProcessingDatabase,
+  runId: string,
+  progress: {
+    failed: number;
+    processed: number;
+    status?: BackgroundStatus;
+  },
+): Promise<void> {
+  await database.regenerationRun.update({
+    data: {
+      failed: progress.failed,
+      processed: progress.processed,
+      ...(progress.status === undefined ? {} : { status: progress.status }),
+    },
+    where: { id: runId },
+  });
+}
+
+async function markRegenerationRunFailed(
+  database: ArticleProcessingDatabase,
+  runId: string,
+  error: unknown,
+): Promise<void> {
+  await database.regenerationRun.update({
+    data: {
+      error: getErrorMessage(error),
+      status: BackgroundStatus.FAILED,
+    },
+    where: { id: runId },
+  });
+}
+
+interface ArticleProcessingMode {
+  allowedStatuses: ArticleProcessingStatus[];
+  cacheOperation: LlmOperation;
+  markLabelFailedOnError: boolean;
+  operation: LlmOperation;
+}
+
+async function processArticleLabel(
+  dependencies: ArticleProcessingDependencies,
+  payload: ArticleProcessingJobData,
+  mode: ArticleProcessingMode,
+): Promise<boolean> {
+  const label = await findProcessableLabel(
+    dependencies.database,
+    payload,
+    mode.allowedStatuses,
+  );
+  if (!label) {
+    return false;
   }
 
   let llmResponse: LlmArticleAnalysisResponse | null = null;
@@ -141,6 +310,7 @@ export async function processArticleJob(
       axes,
       dependencies.llm.provider,
       dependencies.llm.model,
+      mode.cacheOperation,
     );
     const cached = await dependencies.database.llmCache.findUnique({
       where: { cacheKey },
@@ -173,7 +343,7 @@ export async function processArticleJob(
           completionTokens: llmResponse?.usage.completionTokens ?? 0,
           contentHash: label.article.contentHash,
           model: llmResponse?.model ?? dependencies.llm.model ?? 'unknown',
-          operation: LlmOperation.ARTICLE_ANALYSIS,
+          operation: mode.cacheOperation,
           promptTokens: llmResponse?.usage.promptTokens ?? 0,
           provider:
             llmResponse?.provider ??
@@ -186,6 +356,10 @@ export async function processArticleJob(
       cacheId = cache.id;
     }
 
+    const previousMentionEntityIds = await findMentionEntityIds(
+      dependencies.database,
+      label.id,
+    );
     const context = await persistAnalysis(dependencies.database, {
       assignedAxes: matchAxisAssignments(result, axes),
       assignedCategoryIds: matchCategoryIds(result.categories, categories),
@@ -196,6 +370,7 @@ export async function processArticleJob(
         articleTimestampSeconds(label.article.publishedAt),
       ),
       label,
+      previousMentionEntityIds,
       result,
     });
 
@@ -220,15 +395,20 @@ export async function processArticleJob(
         success: true,
         usage: llmResponse.usage,
         userId: payload.userId,
+        operation: mode.operation,
       });
     }
+
+    return true;
   } catch (error) {
-    await dependencies.database.articleLabel.update({
-      data: {
-        status: ArticleProcessingStatus.FAILED,
-      },
-      where: { id: label.id },
-    });
+    if (mode.markLabelFailedOnError) {
+      await dependencies.database.articleLabel.update({
+        data: {
+          status: ArticleProcessingStatus.FAILED,
+        },
+        where: { id: label.id },
+      });
+    }
 
     if (llmResponse) {
       await recordTelemetry(dependencies.database, {
@@ -239,6 +419,7 @@ export async function processArticleJob(
         success: false,
         usage: llmResponse.usage,
         userId: payload.userId,
+        operation: mode.operation,
       });
     }
 
@@ -249,6 +430,7 @@ export async function processArticleJob(
 async function findProcessableLabel(
   database: ArticleProcessingDatabase,
   payload: ArticleProcessingJobData,
+  allowedStatuses: ArticleProcessingStatus[],
 ): Promise<ArticleLabelRecord | null> {
   const label = await database.articleLabel.findFirst({
     include: { article: true },
@@ -261,13 +443,23 @@ async function findProcessableLabel(
 
   if (
     !label ||
-    (label.status !== ArticleProcessingStatus.PENDING &&
-      label.status !== ArticleProcessingStatus.FAILED)
+    !allowedStatuses.includes(label.status as ArticleProcessingStatus)
   ) {
     return null;
   }
 
   return label;
+}
+
+async function findMentionEntityIds(
+  database: ArticleProcessingDatabase,
+  articleLabelId: string,
+): Promise<string[]> {
+  const mentions = await database.articleEntityMention.findMany({
+    select: { entityId: true },
+    where: { articleLabelId },
+  });
+  return [...new Set(mentions.map((mention) => mention.entityId))];
 }
 
 async function persistAnalysis(
@@ -391,6 +583,17 @@ async function updateGraphEdges(
   const articleNodeId = `article:${context.label.article.id}`;
   const timestamp = articleTimestampSeconds(context.label.article.publishedAt);
   const primaryCategoryId = context.assignedCategoryIds[0] ?? null;
+  const previousEntityIds = context.previousMentionEntityIds;
+  const currentEntityIds = context.entities.map((entity) => entity.id);
+
+  for (const entityId of previousEntityIds) {
+    await deleteGraphEdge(database, {
+      fromNodeId: articleNodeId,
+      kind: GraphEdgeKind.MENTIONS,
+      toNodeId: `entity:${entityId}`,
+      userId: context.label.userId,
+    });
+  }
 
   for (const entity of context.entities) {
     await upsertGraphEdge(database, {
@@ -405,22 +608,96 @@ async function updateGraphEdges(
     });
   }
 
-  for (const [left, right] of entityPairs(context.entities)) {
+  const currentPairKeys = entityPairKeys(currentEntityIds);
+  const affectedPairKeys = new Set([
+    ...entityPairKeys(previousEntityIds),
+    ...currentPairKeys,
+  ]);
+
+  for (const pairKey of affectedPairKeys) {
+    const [leftEntityId, rightEntityId] = pairKey.split('|');
     const [fromNodeId, toNodeId] = [
-      `entity:${left.id}`,
-      `entity:${right.id}`,
+      `entity:${leftEntityId}`,
+      `entity:${rightEntityId}`,
     ].sort();
-    await upsertGraphEdge(database, {
-      categoryId: primaryCategoryId,
+    const weight = await countCoMentionedArticles(
+      database,
+      leftEntityId,
+      rightEntityId,
+    );
+
+    if (weight <= 0) {
+      await deleteGraphEdge(database, {
+        fromNodeId,
+        kind: GraphEdgeKind.CO_MENTION,
+        toNodeId,
+        userId: context.label.userId,
+      });
+      continue;
+    }
+
+    if (currentPairKeys.has(pairKey)) {
+      await upsertGraphEdge(database, {
+        categoryId: primaryCategoryId,
+        fromNodeId,
+        kind: GraphEdgeKind.CO_MENTION,
+        score: null,
+        timestamp,
+        toNodeId,
+        userId: context.label.userId,
+        weight,
+      });
+      continue;
+    }
+
+    await updateGraphEdgeWeight(database, {
       fromNodeId,
       kind: GraphEdgeKind.CO_MENTION,
-      score: null,
-      timestamp,
       toNodeId,
       userId: context.label.userId,
-      weight: await countCoMentionedArticles(database, left.id, right.id),
+      weight,
     });
   }
+}
+
+async function deleteGraphEdge(
+  database: ArticleProcessingDatabase,
+  edge: {
+    fromNodeId: string;
+    kind: GraphEdgeKind;
+    toNodeId: string;
+    userId: string;
+  },
+): Promise<void> {
+  await database.graphEdge.deleteMany({
+    where: {
+      fromNodeId: edge.fromNodeId,
+      kind: edge.kind,
+      toNodeId: edge.toNodeId,
+      userId: edge.userId,
+    },
+  });
+}
+
+async function updateGraphEdgeWeight(
+  database: ArticleProcessingDatabase,
+  edge: {
+    fromNodeId: string;
+    kind: GraphEdgeKind;
+    toNodeId: string;
+    userId: string;
+    weight: number;
+  },
+): Promise<void> {
+  await database.graphEdge.updateMany({
+    data: { weight: edge.weight },
+    where: {
+      fromNodeId: edge.fromNodeId,
+      kind: edge.kind,
+      toNodeId: edge.toNodeId,
+      userId: edge.userId,
+    },
+  });
 }
 
 async function upsertGraphEdge(
@@ -551,6 +828,7 @@ async function recordTelemetry(
       totalTokens: number;
     };
     userId: string;
+    operation: LlmOperation;
   },
 ): Promise<void> {
   await database.llmTelemetry.create({
@@ -559,7 +837,7 @@ async function recordTelemetry(
       errorCode: input.errorCode,
       latencyMs: input.latencyMs,
       model: input.model,
-      operation: LlmOperation.ARTICLE_ANALYSIS,
+      operation: input.operation,
       promptTokens: input.usage.promptTokens,
       provider: input.provider,
       success: input.success,
@@ -575,6 +853,7 @@ function buildCacheKey(
   axes: ClassificationAxisRecord[],
   provider?: LlmProvider,
   model?: string,
+  operation: LlmOperation = LlmOperation.ARTICLE_ANALYSIS,
 ): string {
   const configurationHash = createHash('sha256')
     .update(
@@ -589,7 +868,7 @@ function buildCacheKey(
       }),
     )
     .digest('hex');
-  return `${LlmOperation.ARTICLE_ANALYSIS}:${contentHash}:${configurationHash}`;
+  return `${operation}:${contentHash}:${configurationHash}`;
 }
 
 function mergeAliases(
@@ -614,22 +893,23 @@ function mergeAliases(
   return result;
 }
 
-function entityPairs(
-  entities: EntityRecord[],
-): Array<[EntityRecord, EntityRecord]> {
-  const pairs: Array<[EntityRecord, EntityRecord]> = [];
+function entityPairKeys(entityIds: string[]): Set<string> {
+  const uniqueIds = [...new Set(entityIds)];
+  const pairKeys = new Set<string>();
 
-  for (let leftIndex = 0; leftIndex < entities.length; leftIndex += 1) {
+  for (let leftIndex = 0; leftIndex < uniqueIds.length; leftIndex += 1) {
     for (
       let rightIndex = leftIndex + 1;
-      rightIndex < entities.length;
+      rightIndex < uniqueIds.length;
       rightIndex += 1
     ) {
-      pairs.push([entities[leftIndex], entities[rightIndex]]);
+      pairKeys.add(
+        [uniqueIds[leftIndex], uniqueIds[rightIndex]].sort().join('|'),
+      );
     }
   }
 
-  return pairs;
+  return pairKeys;
 }
 
 function articleTimestampSeconds(publishedAt: Date | null): number {
