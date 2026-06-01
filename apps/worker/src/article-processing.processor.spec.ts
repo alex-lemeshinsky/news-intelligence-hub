@@ -290,6 +290,39 @@ describe('processRegenerationJob', () => {
     assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
   });
 
+  it('marks the regeneration run failed when setup fails after running', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      articleLabelFindManyError: new Error('Snapshot lookup failed'),
+      labelStatus: 'PROCESSED',
+    });
+
+    await assert.rejects(
+      () =>
+        processRegenerationJob(
+          {
+            database,
+            llm: {
+              async analyzeArticle() {
+                throw new Error('LLM should not run when setup fails.');
+              },
+            },
+          },
+          {
+            runId: 'run_1',
+            userId: 'user_1',
+          },
+        ),
+      /Snapshot lookup failed/,
+    );
+
+    assert.ok(calls.includes('regenerationRun.update:RUNNING'));
+    assert.ok(
+      calls.includes('regenerationRun.update:FAILED:Snapshot lookup failed'),
+    );
+    assert.ok(!calls.includes('llmCache.findUnique:miss'));
+  });
+
   it('reuses article-analysis cache during regeneration without calling the LLM', async () => {
     const calls: string[] = [];
     const database = createArticleProcessingDatabaseDouble(calls, {
@@ -434,6 +467,7 @@ describe('processRegenerationJob', () => {
 });
 
 interface DatabaseDoubleOptions {
+  articleLabelFindManyError?: Error;
   articleLabelRows?: ArticleLabelRow[];
   cachedResponse?: unknown;
   existingMentions?: string[];
@@ -476,6 +510,11 @@ function createArticleProcessingDatabaseDouble(
   return {
     articleLabel: {
       async findMany(args?: { where?: { id?: { in?: string[] } } }) {
+        if (options.articleLabelFindManyError) {
+          calls.push('articleLabel.findMany:error');
+          throw options.articleLabelFindManyError;
+        }
+
         const snapshotIds = args?.where?.id?.in;
         calls.push(
           snapshotIds
@@ -711,6 +750,7 @@ function createArticleProcessingDatabaseDouble(
       },
       async update(args: {
         data: {
+          error?: string;
           failed?: number | { increment: number };
           processed?: number | { increment: number };
           status?: string;
@@ -734,7 +774,11 @@ function createArticleProcessingDatabaseDouble(
           calls.push('regenerationRun.update:failed');
         }
         if (args.data.status) {
-          calls.push(`regenerationRun.update:${args.data.status}`);
+          calls.push(
+            args.data.error
+              ? `regenerationRun.update:${args.data.status}:${args.data.error}`
+              : `regenerationRun.update:${args.data.status}`,
+          );
         }
         return { id: 'run_1' };
       },

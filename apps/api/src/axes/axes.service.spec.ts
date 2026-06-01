@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ArticleProcessingStatus } from '@prisma/client';
 import { JOB_NAMES, QUEUE_NAMES } from '@nih/shared';
 import { AxesService } from './axes.service';
@@ -37,7 +41,7 @@ describe('AxesService', () => {
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   it('lists only axes owned by the current user', async () => {
@@ -143,6 +147,7 @@ describe('AxesService', () => {
   });
 
   it('starts a regeneration run for processable labels and enqueues the worker', async () => {
+    findLatestRun.mockResolvedValue(null);
     findRegenerationLabels.mockResolvedValue([
       { id: 'label_1' },
       { id: 'label_2' },
@@ -199,7 +204,32 @@ describe('AxesService', () => {
     });
   });
 
+  it('rejects starting a regeneration run while another run is active', async () => {
+    findLatestRun.mockResolvedValue({
+      id: 'run_active',
+      status: 'RUNNING',
+      userId: 'user_1',
+    });
+    const service = new AxesService(database as never, queues as never);
+
+    await expect(service.startRegeneration('user_1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    expect(findLatestRun).toHaveBeenCalledWith({
+      orderBy: { createdAt: 'desc' },
+      where: {
+        status: { in: ['PENDING', 'RUNNING'] },
+        userId: 'user_1',
+      },
+    });
+    expect(findRegenerationLabels).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('completes an empty regeneration run without queueing work', async () => {
+    findLatestRun.mockResolvedValue(null);
     findRegenerationLabels.mockResolvedValue([]);
     createRun.mockResolvedValue({
       id: 'run_empty',
@@ -232,6 +262,7 @@ describe('AxesService', () => {
 
   it('marks a regeneration run failed when enqueueing work fails', async () => {
     const queueError = new Error('Redis connection lost');
+    findLatestRun.mockResolvedValue(null);
     findRegenerationLabels.mockResolvedValue([
       { id: 'label_1' },
       { id: 'label_2' },

@@ -165,73 +165,78 @@ export async function processRegenerationJob(
     return;
   }
 
-  let processed = 0;
-  let failed = 0;
-  await updateRegenerationProgress(dependencies.database, run.id, {
-    failed,
-    processed,
-    status: BackgroundStatus.RUNNING,
-  });
-
-  const labels = await dependencies.database.articleLabel.findMany({
-    select: {
-      articleId: true,
-      id: true,
-    },
-    where: {
-      id: { in: run.articleLabelIds },
-      userId: payload.userId,
-    },
-  });
-  failed = run.articleLabelIds.length - labels.length;
-  if (failed > 0) {
+  try {
+    let processed = 0;
+    let failed = 0;
     await updateRegenerationProgress(dependencies.database, run.id, {
       failed,
       processed,
+      status: BackgroundStatus.RUNNING,
     });
-  }
 
-  for (const label of labels) {
-    try {
-      const wasProcessed = await processArticleLabel(
-        dependencies,
-        {
-          articleId: label.articleId,
-          articleLabelId: label.id,
-          userId: payload.userId,
-        },
-        {
-          allowedStatuses: [
-            ArticleProcessingStatus.PROCESSED,
-            ArticleProcessingStatus.FAILED,
-          ],
-          cacheOperation: LlmOperation.ARTICLE_ANALYSIS,
-          markLabelFailedOnError: false,
-          operation: LlmOperation.REGENERATION,
-        },
-      );
+    const labels = await dependencies.database.articleLabel.findMany({
+      select: {
+        articleId: true,
+        id: true,
+      },
+      where: {
+        id: { in: run.articleLabelIds },
+        userId: payload.userId,
+      },
+    });
+    failed = run.articleLabelIds.length - labels.length;
+    if (failed > 0) {
+      await updateRegenerationProgress(dependencies.database, run.id, {
+        failed,
+        processed,
+      });
+    }
 
-      if (wasProcessed) {
-        processed += 1;
-      } else {
+    for (const label of labels) {
+      try {
+        const wasProcessed = await processArticleLabel(
+          dependencies,
+          {
+            articleId: label.articleId,
+            articleLabelId: label.id,
+            userId: payload.userId,
+          },
+          {
+            allowedStatuses: [
+              ArticleProcessingStatus.PROCESSED,
+              ArticleProcessingStatus.FAILED,
+            ],
+            cacheOperation: LlmOperation.ARTICLE_ANALYSIS,
+            markLabelFailedOnError: false,
+            operation: LlmOperation.REGENERATION,
+          },
+        );
+
+        if (wasProcessed) {
+          processed += 1;
+        } else {
+          failed += 1;
+        }
+      } catch {
         failed += 1;
       }
-    } catch {
-      failed += 1;
+
+      await updateRegenerationProgress(dependencies.database, run.id, {
+        failed,
+        processed,
+      });
     }
 
     await updateRegenerationProgress(dependencies.database, run.id, {
       failed,
       processed,
+      status:
+        failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
     });
+  } catch (error) {
+    await markRegenerationRunFailed(dependencies.database, run.id, error);
+    throw error;
   }
-
-  await updateRegenerationProgress(dependencies.database, run.id, {
-    failed,
-    processed,
-    status:
-      failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
-  });
 }
 
 async function updateRegenerationProgress(
@@ -248,6 +253,20 @@ async function updateRegenerationProgress(
       failed: progress.failed,
       processed: progress.processed,
       ...(progress.status === undefined ? {} : { status: progress.status }),
+    },
+    where: { id: runId },
+  });
+}
+
+async function markRegenerationRunFailed(
+  database: ArticleProcessingDatabase,
+  runId: string,
+  error: unknown,
+): Promise<void> {
+  await database.regenerationRun.update({
+    data: {
+      error: getErrorMessage(error),
+      status: BackgroundStatus.FAILED,
     },
     where: { id: runId },
   });

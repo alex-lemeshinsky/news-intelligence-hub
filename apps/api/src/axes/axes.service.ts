@@ -89,6 +89,19 @@ export class AxesService {
   }
 
   async startRegeneration(userId: string) {
+    const activeRun = await this.database.regenerationRun.findFirst({
+      orderBy: { createdAt: 'desc' },
+      where: {
+        status: {
+          in: [BackgroundStatus.PENDING, BackgroundStatus.RUNNING],
+        },
+        userId,
+      },
+    });
+    if (activeRun) {
+      throw new ConflictException('Regeneration is already running.');
+    }
+
     const labels = await this.database.articleLabel.findMany({
       orderBy: { createdAt: 'asc' },
       select: { id: true },
