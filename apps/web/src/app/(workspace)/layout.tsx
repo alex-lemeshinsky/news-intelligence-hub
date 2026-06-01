@@ -34,6 +34,12 @@ export default async function WorkspaceLayout({
               >
                 Graph
               </Link>
+              <Link
+                className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
+                href="/workspace/settings"
+              >
+                Settings
+              </Link>
             </nav>
             <LogoutButton />
           </div>

@@ -41,6 +41,14 @@ export interface Category {
   name: string;
 }
 
+export interface ClassificationAxis {
+  id: string;
+  name: string;
+  values: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ArticleProcessingStatus =
   | "PENDING"
   | "FILTERED"
