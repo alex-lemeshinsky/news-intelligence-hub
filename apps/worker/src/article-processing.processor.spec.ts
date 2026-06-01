@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { processArticleJob } from './article-processing.processor.js';
+import {
+  processArticleJob,
+  processRegenerationJob,
+} from './article-processing.processor.js';
 
 describe('processArticleJob', () => {
   it('analyzes a pending article and persists labels, entities, graph edges, cache, and telemetry', async () => {
@@ -183,6 +186,96 @@ describe('processArticleJob', () => {
   });
 });
 
+describe('processRegenerationJob', () => {
+  it('reanalyzes processed labels with regeneration cache and telemetry tracking', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      labelStatus: 'PROCESSED',
+    });
+
+    await processRegenerationJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            return {
+              latencyMs: 42,
+              model: 'test-model',
+              provider: 'OPENAI',
+              result: {
+                axes: [{ axisName: 'Reader level', value: 'Technical' }],
+                categories: ['AI infra'],
+                entities: [],
+                importance: 'NORMAL',
+                summary: 'Regenerated article summary.',
+              },
+              usage: {
+                completionTokens: 40,
+                promptTokens: 100,
+                totalTokens: 140,
+              },
+            };
+          },
+        },
+      },
+      {
+        runId: 'run_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.ok(calls.includes('regenerationRun.findFirst:run_1'));
+    assert.ok(calls.includes('regenerationRun.update:RUNNING'));
+    assert.ok(calls.includes('llmCache.create:REGENERATION'));
+    assert.ok(calls.includes('llmTelemetry.create:REGENERATION:true:140'));
+    assert.ok(calls.includes('regenerationRun.update:processed'));
+    assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
+  });
+
+  it('continues after a label fails and records failed regeneration progress', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      labelStatus: 'PROCESSED',
+    });
+
+    await processRegenerationJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            return {
+              latencyMs: 10,
+              model: 'test-model',
+              provider: 'OPENAI',
+              result: {
+                axes: [],
+                categories: [],
+                entities: [{ name: 'Bad entity', type: 'UNKNOWN' }],
+                importance: 'NORMAL',
+                summary: 'Invalid regeneration payload.',
+              },
+              usage: {
+                completionTokens: 4,
+                promptTokens: 8,
+                totalTokens: 12,
+              },
+            };
+          },
+        },
+      },
+      {
+        runId: 'run_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.ok(calls.includes('articleLabel.update:FAILED'));
+    assert.ok(calls.includes('llmTelemetry.create:REGENERATION:false:12'));
+    assert.ok(calls.includes('regenerationRun.update:failed'));
+    assert.ok(calls.includes('regenerationRun.update:FAILED'));
+  });
+});
+
 interface DatabaseDoubleOptions {
   cachedResponse?: unknown;
   labelStatus?: string;
@@ -200,6 +293,15 @@ function createArticleProcessingDatabaseDouble(
 
   return {
     articleLabel: {
+      async findMany() {
+        calls.push('articleLabel.findMany');
+        return [
+          {
+            articleId: 'article_1',
+            id: 'label_1',
+          },
+        ];
+      },
       async findFirst() {
         calls.push('articleLabel.findFirst');
         return {
@@ -329,8 +431,9 @@ function createArticleProcessingDatabaseDouble(
       },
     },
     llmCache: {
-      async create() {
+      async create(args: { data: { operation: string } }) {
         calls.push('llmCache.create');
+        calls.push(`llmCache.create:${args.data.operation}`);
         return { id: 'cache_1' };
       },
       async findUnique() {
@@ -348,12 +451,43 @@ function createArticleProcessingDatabaseDouble(
     llmTelemetry: {
       async create(args: {
         data: {
+          operation: string;
           success: boolean;
           totalTokens: number;
         };
       }) {
         calls.push(`llmTelemetry.create:${args.data.success}:${args.data.totalTokens}`);
+        calls.push(
+          `llmTelemetry.create:${args.data.operation}:${args.data.success}:${args.data.totalTokens}`,
+        );
         return { id: 'telemetry_1' };
+      },
+    },
+    regenerationRun: {
+      async findFirst(args: { where: { id: string } }) {
+        calls.push(`regenerationRun.findFirst:${args.where.id}`);
+        return {
+          id: args.where.id,
+          userId: 'user_1',
+        };
+      },
+      async update(args: {
+        data: {
+          failed?: { increment: number };
+          processed?: { increment: number };
+          status?: string;
+        };
+      }) {
+        if (args.data.processed) {
+          calls.push('regenerationRun.update:processed');
+        }
+        if (args.data.failed) {
+          calls.push('regenerationRun.update:failed');
+        }
+        if (args.data.status) {
+          calls.push(`regenerationRun.update:${args.data.status}`);
+        }
+        return { id: 'run_1' };
       },
     },
   };

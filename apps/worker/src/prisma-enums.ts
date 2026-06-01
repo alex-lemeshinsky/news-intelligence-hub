@@ -58,3 +58,13 @@ export const LlmProvider = {
 } as const;
 
 export type LlmProvider = (typeof LlmProvider)[keyof typeof LlmProvider];
+
+export const BackgroundStatus = {
+  PENDING: 'PENDING',
+  RUNNING: 'RUNNING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+} as const;
+
+export type BackgroundStatus =
+  (typeof BackgroundStatus)[keyof typeof BackgroundStatus];

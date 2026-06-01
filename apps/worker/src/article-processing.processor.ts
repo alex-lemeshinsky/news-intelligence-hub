@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { ArticleProcessingJobData } from '@nih/shared';
+import { ArticleProcessingJobData, RegenerationJobData } from '@nih/shared';
 import {
   ArticleAnalysis,
   ArticleAnalysisEntity,
@@ -9,6 +9,7 @@ import {
 } from './llm-client.js';
 import {
   ArticleProcessingStatus,
+  BackgroundStatus,
   GraphEdgeKind,
   LlmOperation,
   LlmProvider,
@@ -35,6 +36,7 @@ export interface ArticleProcessingDatabase {
   };
   articleLabel: {
     findFirst(args: Record<string, unknown>): Promise<ArticleLabelRecord | null>;
+    findMany(args: Record<string, unknown>): Promise<ArticleLabelPointerRecord[]>;
     update(args: Record<string, unknown>): Promise<unknown>;
   };
   category: {
@@ -58,6 +60,10 @@ export interface ArticleProcessingDatabase {
   llmTelemetry: {
     create(args: Record<string, unknown>): Promise<unknown>;
   };
+  regenerationRun: {
+    findFirst(args: Record<string, unknown>): Promise<RegenerationRunRecord | null>;
+    update(args: Record<string, unknown>): Promise<unknown>;
+  };
 }
 
 interface ArticleLabelRecord {
@@ -71,6 +77,16 @@ interface ArticleLabelRecord {
   articleId: string;
   id: string;
   status: string;
+  userId: string;
+}
+
+interface ArticleLabelPointerRecord {
+  articleId: string;
+  id: string;
+}
+
+interface RegenerationRunRecord {
+  id: string;
   userId: string;
 }
 
@@ -119,9 +135,103 @@ export async function processArticleJob(
   dependencies: ArticleProcessingDependencies,
   payload: ArticleProcessingJobData,
 ): Promise<void> {
-  const label = await findProcessableLabel(dependencies.database, payload);
-  if (!label) {
+  await processArticleLabel(dependencies, payload, {
+    allowedStatuses: [
+      ArticleProcessingStatus.PENDING,
+      ArticleProcessingStatus.FAILED,
+    ],
+    operation: LlmOperation.ARTICLE_ANALYSIS,
+  });
+}
+
+export async function processRegenerationJob(
+  dependencies: ArticleProcessingDependencies,
+  payload: RegenerationJobData,
+): Promise<void> {
+  const run = await dependencies.database.regenerationRun.findFirst({
+    where: {
+      id: payload.runId,
+      userId: payload.userId,
+    },
+  });
+
+  if (!run) {
     return;
+  }
+
+  await dependencies.database.regenerationRun.update({
+    data: { status: BackgroundStatus.RUNNING },
+    where: { id: run.id },
+  });
+
+  const labels = await dependencies.database.articleLabel.findMany({
+    select: {
+      articleId: true,
+      id: true,
+    },
+    where: buildRegenerationLabelWhere(payload.userId),
+  });
+  let failed = 0;
+
+  for (const label of labels) {
+    try {
+      const processed = await processArticleLabel(
+        dependencies,
+        {
+          articleId: label.articleId,
+          articleLabelId: label.id,
+          userId: payload.userId,
+        },
+        {
+          allowedStatuses: [
+            ArticleProcessingStatus.PROCESSED,
+            ArticleProcessingStatus.FAILED,
+          ],
+          operation: LlmOperation.REGENERATION,
+        },
+      );
+
+      if (processed) {
+        await dependencies.database.regenerationRun.update({
+          data: { processed: { increment: 1 } },
+          where: { id: run.id },
+        });
+      }
+    } catch {
+      failed += 1;
+      await dependencies.database.regenerationRun.update({
+        data: { failed: { increment: 1 } },
+        where: { id: run.id },
+      });
+    }
+  }
+
+  await dependencies.database.regenerationRun.update({
+    data: {
+      status:
+        failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
+    },
+    where: { id: run.id },
+  });
+}
+
+interface ArticleProcessingMode {
+  allowedStatuses: ArticleProcessingStatus[];
+  operation: LlmOperation;
+}
+
+async function processArticleLabel(
+  dependencies: ArticleProcessingDependencies,
+  payload: ArticleProcessingJobData,
+  mode: ArticleProcessingMode,
+): Promise<boolean> {
+  const label = await findProcessableLabel(
+    dependencies.database,
+    payload,
+    mode.allowedStatuses,
+  );
+  if (!label) {
+    return false;
   }
 
   let llmResponse: LlmArticleAnalysisResponse | null = null;
@@ -141,6 +251,7 @@ export async function processArticleJob(
       axes,
       dependencies.llm.provider,
       dependencies.llm.model,
+      mode.operation,
     );
     const cached = await dependencies.database.llmCache.findUnique({
       where: { cacheKey },
@@ -173,7 +284,7 @@ export async function processArticleJob(
           completionTokens: llmResponse?.usage.completionTokens ?? 0,
           contentHash: label.article.contentHash,
           model: llmResponse?.model ?? dependencies.llm.model ?? 'unknown',
-          operation: LlmOperation.ARTICLE_ANALYSIS,
+          operation: mode.operation,
           promptTokens: llmResponse?.usage.promptTokens ?? 0,
           provider:
             llmResponse?.provider ??
@@ -220,8 +331,11 @@ export async function processArticleJob(
         success: true,
         usage: llmResponse.usage,
         userId: payload.userId,
+        operation: mode.operation,
       });
     }
+
+    return true;
   } catch (error) {
     await dependencies.database.articleLabel.update({
       data: {
@@ -239,6 +353,7 @@ export async function processArticleJob(
         success: false,
         usage: llmResponse.usage,
         userId: payload.userId,
+        operation: mode.operation,
       });
     }
 
@@ -249,6 +364,7 @@ export async function processArticleJob(
 async function findProcessableLabel(
   database: ArticleProcessingDatabase,
   payload: ArticleProcessingJobData,
+  allowedStatuses: ArticleProcessingStatus[],
 ): Promise<ArticleLabelRecord | null> {
   const label = await database.articleLabel.findFirst({
     include: { article: true },
@@ -261,8 +377,7 @@ async function findProcessableLabel(
 
   if (
     !label ||
-    (label.status !== ArticleProcessingStatus.PENDING &&
-      label.status !== ArticleProcessingStatus.FAILED)
+    !allowedStatuses.includes(label.status as ArticleProcessingStatus)
   ) {
     return null;
   }
@@ -551,6 +666,7 @@ async function recordTelemetry(
       totalTokens: number;
     };
     userId: string;
+    operation: LlmOperation;
   },
 ): Promise<void> {
   await database.llmTelemetry.create({
@@ -559,7 +675,7 @@ async function recordTelemetry(
       errorCode: input.errorCode,
       latencyMs: input.latencyMs,
       model: input.model,
-      operation: LlmOperation.ARTICLE_ANALYSIS,
+      operation: input.operation,
       promptTokens: input.usage.promptTokens,
       provider: input.provider,
       success: input.success,
@@ -575,6 +691,7 @@ function buildCacheKey(
   axes: ClassificationAxisRecord[],
   provider?: LlmProvider,
   model?: string,
+  operation: LlmOperation = LlmOperation.ARTICLE_ANALYSIS,
 ): string {
   const configurationHash = createHash('sha256')
     .update(
@@ -589,7 +706,16 @@ function buildCacheKey(
       }),
     )
     .digest('hex');
-  return `${LlmOperation.ARTICLE_ANALYSIS}:${contentHash}:${configurationHash}`;
+  return `${operation}:${contentHash}:${configurationHash}`;
+}
+
+function buildRegenerationLabelWhere(userId: string) {
+  return {
+    status: {
+      in: [ArticleProcessingStatus.PROCESSED, ArticleProcessingStatus.FAILED],
+    },
+    userId,
+  };
 }
 
 function mergeAliases(

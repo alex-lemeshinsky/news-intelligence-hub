@@ -5,10 +5,12 @@ import {
   JOB_NAMES,
   QUEUE_NAMES,
   QueueName,
+  RegenerationJobData,
 } from '@nih/shared';
 import {
   ArticleProcessingDependencies,
   processArticleJob,
+  processRegenerationJob,
 } from './article-processing.processor.js';
 import { FeedPullDependencies, pullFeedJob } from './feed-pull.processor.js';
 
@@ -47,6 +49,17 @@ export async function handleQueueJob(
     await processArticleJob(
       dependencies.articleProcessing,
       job.data as ArticleProcessingJobData,
+    );
+    return;
+  }
+
+  if (
+    queueName === QUEUE_NAMES.regeneration &&
+    job.name === JOB_NAMES.regenerateArticles
+  ) {
+    await processRegenerationJob(
+      dependencies.articleProcessing,
+      job.data as RegenerationJobData,
     );
     return;
   }
