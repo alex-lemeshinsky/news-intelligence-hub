@@ -187,7 +187,7 @@ describe('processArticleJob', () => {
 });
 
 describe('processRegenerationJob', () => {
-  it('reanalyzes processed labels with regeneration cache and telemetry tracking', async () => {
+  it('reanalyzes processed labels with shared analysis cache and regeneration telemetry', async () => {
     const calls: string[] = [];
     const database = createArticleProcessingDatabaseDouble(calls, {
       labelStatus: 'PROCESSED',
@@ -226,13 +226,49 @@ describe('processRegenerationJob', () => {
 
     assert.ok(calls.includes('regenerationRun.findFirst:run_1'));
     assert.ok(calls.includes('regenerationRun.update:RUNNING'));
-    assert.ok(calls.includes('llmCache.create:REGENERATION'));
+    assert.ok(calls.includes('llmCache.create:ARTICLE_ANALYSIS'));
     assert.ok(calls.includes('llmTelemetry.create:REGENERATION:true:140'));
     assert.ok(calls.includes('regenerationRun.update:processed'));
     assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
   });
 
-  it('continues after a label fails and records failed regeneration progress', async () => {
+  it('reuses article-analysis cache during regeneration without calling the LLM', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      cachedResponse: {
+        axes: [],
+        categories: [],
+        entities: [],
+        importance: 'NORMAL',
+        summary: 'Cached article analysis summary.',
+      },
+      labelStatus: 'PROCESSED',
+    });
+    let llmCalls = 0;
+
+    await processRegenerationJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            llmCalls += 1;
+            throw new Error('Regeneration should reuse analysis cache.');
+          },
+        },
+      },
+      {
+        runId: 'run_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.equal(llmCalls, 0);
+    assert.ok(calls.includes('llmCache.findUnique:ARTICLE_ANALYSIS:hit'));
+    assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
+    assert.ok(calls.includes('regenerationRun.update:COMPLETED'));
+  });
+
+  it('preserves processed labels when regeneration fails', async () => {
     const calls: string[] = [];
     const database = createArticleProcessingDatabaseDouble(calls, {
       labelStatus: 'PROCESSED',
@@ -269,15 +305,78 @@ describe('processRegenerationJob', () => {
       },
     );
 
-    assert.ok(calls.includes('articleLabel.update:FAILED'));
+    assert.ok(!calls.includes('articleLabel.update:FAILED'));
     assert.ok(calls.includes('llmTelemetry.create:REGENERATION:false:12'));
     assert.ok(calls.includes('regenerationRun.update:failed'));
     assert.ok(calls.includes('regenerationRun.update:FAILED'));
+  });
+
+  it('removes stale mention and co-mention graph edges when regenerated entities change', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      existingMentions: ['entity_microsoft', 'entity_azure_ai'],
+      labelStatus: 'PROCESSED',
+    });
+
+    await processRegenerationJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            return {
+              latencyMs: 12,
+              model: 'test-model',
+              provider: 'OPENAI',
+              result: {
+                axes: [],
+                categories: [],
+                entities: [
+                  {
+                    aliases: ['MSFT'],
+                    description: 'Cloud and AI platform company.',
+                    name: 'Microsoft',
+                    type: 'COMPANY',
+                  },
+                ],
+                importance: 'NORMAL',
+                summary: 'Regeneration dropped the Azure AI mention.',
+              },
+              usage: {
+                completionTokens: 4,
+                promptTokens: 8,
+                totalTokens: 12,
+              },
+            };
+          },
+        },
+      },
+      {
+        runId: 'run_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.ok(
+      calls.includes(
+        'graphEdge.deleteMany:MENTIONS:article:article_1->entity:entity_azure_ai',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'graphEdge.deleteMany:CO_MENTION:entity:entity_azure_ai->entity:entity_microsoft',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'graphEdge.upsert:MENTIONS:article:article_1->entity:entity_microsoft',
+      ),
+    );
   });
 });
 
 interface DatabaseDoubleOptions {
   cachedResponse?: unknown;
+  existingMentions?: string[];
   labelStatus?: string;
 }
 
@@ -289,7 +388,16 @@ function createArticleProcessingDatabaseDouble(
   const mentionRecords: Array<{
     articleLabelId: string;
     entityId: string;
-  }> = [];
+  }> = (options.existingMentions ?? []).map((entityId) => ({
+    articleLabelId: 'label_1',
+    entityId,
+  }));
+  if (options.existingMentions?.includes('entity_microsoft')) {
+    entityIds.set('microsoft', 'entity_microsoft');
+  }
+  if (options.existingMentions?.includes('entity_azure_ai')) {
+    entityIds.set('azure ai', 'entity_azure_ai');
+  }
 
   return {
     articleLabel: {
@@ -417,6 +525,33 @@ function createArticleProcessingDatabaseDouble(
       },
     },
     graphEdge: {
+      async deleteMany(args: {
+        where: {
+          fromNodeId?: string;
+          kind?: string;
+          toNodeId?: string;
+        };
+      }) {
+        calls.push(
+          `graphEdge.deleteMany:${args.where.kind}:${args.where.fromNodeId}->${args.where.toNodeId}`,
+        );
+        return { count: 1 };
+      },
+      async updateMany(args: {
+        data: {
+          weight: number;
+        };
+        where: {
+          fromNodeId?: string;
+          kind?: string;
+          toNodeId?: string;
+        };
+      }) {
+        calls.push(
+          `graphEdge.updateMany:${args.where.kind}:${args.where.fromNodeId}->${args.where.toNodeId}:${args.data.weight}`,
+        );
+        return { count: 1 };
+      },
       async upsert(args: {
         create: {
           fromNodeId: string;
@@ -436,8 +571,18 @@ function createArticleProcessingDatabaseDouble(
         calls.push(`llmCache.create:${args.data.operation}`);
         return { id: 'cache_1' };
       },
-      async findUnique() {
-        calls.push(options.cachedResponse ? 'llmCache.findUnique:hit' : 'llmCache.findUnique:miss');
+      async findUnique(args: { where: { cacheKey: string } }) {
+        const operation = args.where.cacheKey.split(':')[0] ?? 'unknown';
+        calls.push(
+          options.cachedResponse
+            ? 'llmCache.findUnique:hit'
+            : 'llmCache.findUnique:miss',
+        );
+        calls.push(
+          `llmCache.findUnique:${operation}:${
+            options.cachedResponse ? 'hit' : 'miss'
+          }`,
+        );
         return options.cachedResponse
           ? {
               id: 'cache_existing',

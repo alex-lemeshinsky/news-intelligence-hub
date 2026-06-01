@@ -51,6 +51,8 @@ export interface ArticleProcessingDatabase {
     update(args: Record<string, unknown>): Promise<EntityRecord>;
   };
   graphEdge: {
+    deleteMany(args: Record<string, unknown>): Promise<unknown>;
+    updateMany(args: Record<string, unknown>): Promise<unknown>;
     upsert(args: Record<string, unknown>): Promise<unknown>;
   };
   llmCache: {
@@ -128,6 +130,7 @@ interface PersistedAnalysisContext {
   assignedCategoryIds: string[];
   entities: EntityRecord[];
   label: ArticleLabelRecord;
+  previousMentionEntityIds: string[];
   result: ArticleAnalysis;
 }
 
@@ -140,6 +143,8 @@ export async function processArticleJob(
       ArticleProcessingStatus.PENDING,
       ArticleProcessingStatus.FAILED,
     ],
+    cacheOperation: LlmOperation.ARTICLE_ANALYSIS,
+    markLabelFailedOnError: true,
     operation: LlmOperation.ARTICLE_ANALYSIS,
   });
 }
@@ -187,6 +192,8 @@ export async function processRegenerationJob(
             ArticleProcessingStatus.PROCESSED,
             ArticleProcessingStatus.FAILED,
           ],
+          cacheOperation: LlmOperation.ARTICLE_ANALYSIS,
+          markLabelFailedOnError: false,
           operation: LlmOperation.REGENERATION,
         },
       );
@@ -217,6 +224,8 @@ export async function processRegenerationJob(
 
 interface ArticleProcessingMode {
   allowedStatuses: ArticleProcessingStatus[];
+  cacheOperation: LlmOperation;
+  markLabelFailedOnError: boolean;
   operation: LlmOperation;
 }
 
@@ -251,7 +260,7 @@ async function processArticleLabel(
       axes,
       dependencies.llm.provider,
       dependencies.llm.model,
-      mode.operation,
+      mode.cacheOperation,
     );
     const cached = await dependencies.database.llmCache.findUnique({
       where: { cacheKey },
@@ -284,7 +293,7 @@ async function processArticleLabel(
           completionTokens: llmResponse?.usage.completionTokens ?? 0,
           contentHash: label.article.contentHash,
           model: llmResponse?.model ?? dependencies.llm.model ?? 'unknown',
-          operation: mode.operation,
+          operation: mode.cacheOperation,
           promptTokens: llmResponse?.usage.promptTokens ?? 0,
           provider:
             llmResponse?.provider ??
@@ -297,6 +306,10 @@ async function processArticleLabel(
       cacheId = cache.id;
     }
 
+    const previousMentionEntityIds = await findMentionEntityIds(
+      dependencies.database,
+      label.id,
+    );
     const context = await persistAnalysis(dependencies.database, {
       assignedAxes: matchAxisAssignments(result, axes),
       assignedCategoryIds: matchCategoryIds(result.categories, categories),
@@ -307,6 +320,7 @@ async function processArticleLabel(
         articleTimestampSeconds(label.article.publishedAt),
       ),
       label,
+      previousMentionEntityIds,
       result,
     });
 
@@ -337,12 +351,14 @@ async function processArticleLabel(
 
     return true;
   } catch (error) {
-    await dependencies.database.articleLabel.update({
-      data: {
-        status: ArticleProcessingStatus.FAILED,
-      },
-      where: { id: label.id },
-    });
+    if (mode.markLabelFailedOnError) {
+      await dependencies.database.articleLabel.update({
+        data: {
+          status: ArticleProcessingStatus.FAILED,
+        },
+        where: { id: label.id },
+      });
+    }
 
     if (llmResponse) {
       await recordTelemetry(dependencies.database, {
@@ -383,6 +399,17 @@ async function findProcessableLabel(
   }
 
   return label;
+}
+
+async function findMentionEntityIds(
+  database: ArticleProcessingDatabase,
+  articleLabelId: string,
+): Promise<string[]> {
+  const mentions = await database.articleEntityMention.findMany({
+    select: { entityId: true },
+    where: { articleLabelId },
+  });
+  return [...new Set(mentions.map((mention) => mention.entityId))];
 }
 
 async function persistAnalysis(
@@ -506,6 +533,17 @@ async function updateGraphEdges(
   const articleNodeId = `article:${context.label.article.id}`;
   const timestamp = articleTimestampSeconds(context.label.article.publishedAt);
   const primaryCategoryId = context.assignedCategoryIds[0] ?? null;
+  const previousEntityIds = context.previousMentionEntityIds;
+  const currentEntityIds = context.entities.map((entity) => entity.id);
+
+  for (const entityId of previousEntityIds) {
+    await deleteGraphEdge(database, {
+      fromNodeId: articleNodeId,
+      kind: GraphEdgeKind.MENTIONS,
+      toNodeId: `entity:${entityId}`,
+      userId: context.label.userId,
+    });
+  }
 
   for (const entity of context.entities) {
     await upsertGraphEdge(database, {
@@ -520,22 +558,96 @@ async function updateGraphEdges(
     });
   }
 
-  for (const [left, right] of entityPairs(context.entities)) {
+  const currentPairKeys = entityPairKeys(currentEntityIds);
+  const affectedPairKeys = new Set([
+    ...entityPairKeys(previousEntityIds),
+    ...currentPairKeys,
+  ]);
+
+  for (const pairKey of affectedPairKeys) {
+    const [leftEntityId, rightEntityId] = pairKey.split('|');
     const [fromNodeId, toNodeId] = [
-      `entity:${left.id}`,
-      `entity:${right.id}`,
+      `entity:${leftEntityId}`,
+      `entity:${rightEntityId}`,
     ].sort();
-    await upsertGraphEdge(database, {
-      categoryId: primaryCategoryId,
+    const weight = await countCoMentionedArticles(
+      database,
+      leftEntityId,
+      rightEntityId,
+    );
+
+    if (weight <= 0) {
+      await deleteGraphEdge(database, {
+        fromNodeId,
+        kind: GraphEdgeKind.CO_MENTION,
+        toNodeId,
+        userId: context.label.userId,
+      });
+      continue;
+    }
+
+    if (currentPairKeys.has(pairKey)) {
+      await upsertGraphEdge(database, {
+        categoryId: primaryCategoryId,
+        fromNodeId,
+        kind: GraphEdgeKind.CO_MENTION,
+        score: null,
+        timestamp,
+        toNodeId,
+        userId: context.label.userId,
+        weight,
+      });
+      continue;
+    }
+
+    await updateGraphEdgeWeight(database, {
       fromNodeId,
       kind: GraphEdgeKind.CO_MENTION,
-      score: null,
-      timestamp,
       toNodeId,
       userId: context.label.userId,
-      weight: await countCoMentionedArticles(database, left.id, right.id),
+      weight,
     });
   }
+}
+
+async function deleteGraphEdge(
+  database: ArticleProcessingDatabase,
+  edge: {
+    fromNodeId: string;
+    kind: GraphEdgeKind;
+    toNodeId: string;
+    userId: string;
+  },
+): Promise<void> {
+  await database.graphEdge.deleteMany({
+    where: {
+      fromNodeId: edge.fromNodeId,
+      kind: edge.kind,
+      toNodeId: edge.toNodeId,
+      userId: edge.userId,
+    },
+  });
+}
+
+async function updateGraphEdgeWeight(
+  database: ArticleProcessingDatabase,
+  edge: {
+    fromNodeId: string;
+    kind: GraphEdgeKind;
+    toNodeId: string;
+    userId: string;
+    weight: number;
+  },
+): Promise<void> {
+  await database.graphEdge.updateMany({
+    data: { weight: edge.weight },
+    where: {
+      fromNodeId: edge.fromNodeId,
+      kind: edge.kind,
+      toNodeId: edge.toNodeId,
+      userId: edge.userId,
+    },
+  });
 }
 
 async function upsertGraphEdge(
@@ -740,22 +852,23 @@ function mergeAliases(
   return result;
 }
 
-function entityPairs(
-  entities: EntityRecord[],
-): Array<[EntityRecord, EntityRecord]> {
-  const pairs: Array<[EntityRecord, EntityRecord]> = [];
+function entityPairKeys(entityIds: string[]): Set<string> {
+  const uniqueIds = [...new Set(entityIds)];
+  const pairKeys = new Set<string>();
 
-  for (let leftIndex = 0; leftIndex < entities.length; leftIndex += 1) {
+  for (let leftIndex = 0; leftIndex < uniqueIds.length; leftIndex += 1) {
     for (
       let rightIndex = leftIndex + 1;
-      rightIndex < entities.length;
+      rightIndex < uniqueIds.length;
       rightIndex += 1
     ) {
-      pairs.push([entities[leftIndex], entities[rightIndex]]);
+      pairKeys.add(
+        [uniqueIds[leftIndex], uniqueIds[rightIndex]].sort().join('|'),
+      );
     }
   }
 
-  return pairs;
+  return pairKeys;
 }
 
 function articleTimestampSeconds(publishedAt: Date | null): number {
