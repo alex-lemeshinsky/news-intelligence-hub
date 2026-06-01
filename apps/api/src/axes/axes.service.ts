@@ -1,4 +1,132 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { DatabaseService } from '../database/database.service';
+
+export interface CreateAxisInput {
+  name: string;
+  values: string[];
+}
+
+export interface UpdateAxisInput {
+  name?: string;
+  values?: string[];
+}
 
 @Injectable()
-export class AxesService {}
+export class AxesService {
+  constructor(private readonly database: DatabaseService) {}
+
+  list(userId: string) {
+    return this.database.classificationAxis.findMany({
+      orderBy: { name: 'asc' },
+      where: { userId },
+    });
+  }
+
+  async create(userId: string, input: CreateAxisInput) {
+    try {
+      return await this.database.classificationAxis.create({
+        data: {
+          name: normalizeName(input.name),
+          userId,
+          values: normalizeValues(input.values),
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException('Axis already exists.');
+      }
+
+      throw error;
+    }
+  }
+
+  async update(userId: string, axisId: string, input: UpdateAxisInput) {
+    const axis = await this.findOwnedAxis(userId, axisId);
+    const data = {
+      ...(input.name === undefined ? {} : { name: normalizeName(input.name) }),
+      ...(input.values === undefined
+        ? {}
+        : { values: normalizeValues(input.values) }),
+    };
+
+    try {
+      return await this.database.classificationAxis.update({
+        data,
+        where: { id: axis.id },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException('Axis already exists.');
+      }
+
+      throw error;
+    }
+  }
+
+  async remove(userId: string, axisId: string) {
+    const axis = await this.findOwnedAxis(userId, axisId);
+    return this.database.classificationAxis.delete({
+      where: { id: axis.id },
+    });
+  }
+
+  private async findOwnedAxis(userId: string, axisId: string) {
+    const axis = await this.database.classificationAxis.findFirst({
+      where: {
+        id: axisId,
+        userId,
+      },
+    });
+
+    if (!axis) {
+      throw new NotFoundException('Axis was not found.');
+    }
+
+    return axis;
+  }
+}
+
+function normalizeName(name: string): string {
+  const normalized = name.trim();
+  if (!normalized) {
+    throw new BadRequestException('Axis name is required.');
+  }
+
+  return normalized;
+}
+
+function normalizeValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalizedValues: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.trim();
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalizedValues.push(normalized);
+  }
+
+  if (normalizedValues.length === 0) {
+    throw new BadRequestException('Axis must have at least one value.');
+  }
+
+  return normalizedValues;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'P2002'
+  );
+}
