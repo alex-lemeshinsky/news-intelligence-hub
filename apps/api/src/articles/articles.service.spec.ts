@@ -3,9 +3,14 @@ import { ArticlesService } from './articles.service';
 
 describe('ArticlesService', () => {
   const findLabels = jest.fn<Promise<unknown[]>, [FindLabelsArgs]>();
+  const findLabel = jest.fn<
+    Promise<Record<string, unknown> | null>,
+    [Record<string, unknown>]
+  >();
 
   const database = {
     articleLabel: {
+      findFirst: findLabel,
       findMany: findLabels,
     },
   };
@@ -108,6 +113,116 @@ describe('ArticlesService', () => {
         sourceTitle: 'Primary Feed',
       }),
     ]);
+  });
+
+  it('returns tenant-scoped article detail with duplicate sources and similar articles', async () => {
+    findLabel.mockResolvedValue({
+      article: {
+        canonicalUrl: 'https://example.com/article',
+        feedItems: [
+          {
+            feed: {
+              id: 'feed_1',
+              title: 'Primary Feed',
+              url: 'https://feed',
+            },
+            originalUrl: 'https://example.com/article',
+            pulledAt: new Date('2026-05-27T10:05:00.000Z'),
+          },
+          {
+            feed: { id: 'feed_2', title: null, url: 'https://other' },
+            originalUrl: 'https://example.com/article?copy=1',
+            pulledAt: new Date('2026-05-27T10:10:00.000Z'),
+          },
+        ],
+        id: 'article_1',
+        normalizedUrl: 'https://example.com/article',
+        publishedAt: new Date('2026-05-27T10:00:00.000Z'),
+        similaritySource: [
+          {
+            id: 'sim_1',
+            kind: 'EXACT_CONTENT',
+            score: null,
+            similarArticle: {
+              id: 'article_2',
+              labels: [
+                {
+                  id: 'label_2',
+                  importance: ArticleImportance.NORMAL,
+                  summary: 'Related article summary.',
+                },
+              ],
+              publishedAt: new Date('2026-05-27T11:00:00.000Z'),
+              title: 'Related AI runtime coverage',
+            },
+          },
+        ],
+        similarityTarget: [],
+        title: 'Microsoft ships AI runtime',
+      },
+      axes: [
+        {
+          axis: { id: 'axis_1', name: 'Reader level' },
+          value: 'Technical',
+        },
+      ],
+      categories: [{ category: { id: 'cat_1', name: 'AI infrastructure' } }],
+      id: 'label_1',
+      importance: ArticleImportance.HIGH,
+      mentions: [
+        {
+          entity: {
+            canonicalName: 'Microsoft',
+            id: 'entity_1',
+            type: 'COMPANY',
+          },
+        },
+      ],
+      preFilterReason: null,
+      status: ArticleProcessingStatus.PROCESSED,
+      summary: 'Microsoft shipped a runtime.',
+    });
+    const service = new ArticlesService(database as never);
+
+    const detail = await service.getDetail('user_1', 'label_1');
+    const call = findLabel.mock.calls[0]?.[0];
+
+    expect(call?.where).toEqual({ id: 'label_1', userId: 'user_1' });
+    expect(detail).toEqual(
+      expect.objectContaining({
+        duplicateCount: 1,
+        id: 'label_1',
+        similarCount: 2,
+        title: 'Microsoft ships AI runtime',
+      }),
+    );
+    expect(detail.duplicateSources).toEqual([
+      expect.objectContaining({
+        feedId: 'feed_1',
+        originalUrl: 'https://example.com/article',
+        sourceTitle: 'Primary Feed',
+      }),
+      expect.objectContaining({
+        feedId: 'feed_2',
+        sourceTitle: 'https://other',
+      }),
+    ]);
+    expect(detail.similarArticles).toEqual([
+      expect.objectContaining({
+        articleId: 'article_2',
+        articleLabelId: 'label_2',
+        title: 'Related AI runtime coverage',
+      }),
+    ]);
+  });
+
+  it('rejects article detail access for labels outside the current user scope', async () => {
+    findLabel.mockResolvedValue(null);
+    const service = new ArticlesService(database as never);
+
+    await expect(
+      service.getDetail('user_1', 'label_from_other_user'),
+    ).rejects.toThrow('Article was not found.');
   });
 });
 

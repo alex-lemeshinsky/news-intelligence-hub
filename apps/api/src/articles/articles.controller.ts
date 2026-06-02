@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ArticleImportance, ArticleProcessingStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.service';
 import { CookieAuthGuard } from '../auth/cookie-auth.guard';
@@ -21,6 +21,14 @@ export class ArticlesController {
   @Get()
   list(@CurrentUser() user: AuthUser, @Query() query: ArticleListQuery) {
     return this.articlesService.list(user.id, normalizeQuery(query));
+  }
+
+  @Get(':articleLabelId')
+  getDetail(
+    @CurrentUser() user: AuthUser,
+    @Param('articleLabelId') articleLabelId: string,
+  ) {
+    return this.articlesService.getDetail(user.id, articleLabelId);
   }
 }
 

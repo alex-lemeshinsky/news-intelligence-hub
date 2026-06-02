@@ -1,13 +1,20 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import { DetailDrawer } from "@/components/workspace/detail-drawer";
+import {
+  ArticleDetailContent,
+  EntityDetailContent,
+} from "@/components/workspace/intelligence-detail-content";
 import { browserApiFetch } from "@/lib/api/browser";
 import { ApiError } from "@/lib/api/shared";
 import type {
+  ArticleDetail,
   ArticleFeedItem,
   ArticleFeedResponse,
   ArticleImportance,
   Category,
+  EntityDetail,
   Feed,
   FeedStatus,
   ArticleProcessingStatus,
@@ -32,6 +39,15 @@ export function WorkspaceClient({
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detailKind, setDetailKind] = useState<"article" | "entity" | null>(
+    null,
+  );
+  const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(
+    null,
+  );
+  const [entityDetail, setEntityDetail] = useState<EntityDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const processedCount = useMemo(
     () => articles.filter((article) => article.status === "PROCESSED").length,
@@ -115,6 +131,54 @@ export function WorkspaceClient({
       setNotice("Feed pull queued.");
       await refreshWorkspace();
     });
+  }
+
+  async function openArticleDetail(articleLabelId: string) {
+    setDetailKind("article");
+    setArticleDetail(null);
+    setEntityDetail(null);
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      setArticleDetail(
+        await browserApiFetch<ArticleDetail>(`/articles/${articleLabelId}`),
+      );
+    } catch (detailFetchError) {
+      setDetailError(
+        detailFetchError instanceof ApiError
+          ? detailFetchError.message
+          : "Article details failed to load.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function openEntityDetail(entityId: string) {
+    setDetailKind("entity");
+    setArticleDetail(null);
+    setEntityDetail(null);
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      setEntityDetail(
+        await browserApiFetch<EntityDetail>(`/graph/entities/${entityId}`),
+      );
+    } catch (detailFetchError) {
+      setDetailError(
+        detailFetchError instanceof ApiError
+          ? detailFetchError.message
+          : "Entity details failed to load.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeDetailDrawer() {
+    setDetailKind(null);
+    setDetailError(null);
+    setDetailLoading(false);
   }
 
   async function runAction(actionId: string, action: () => Promise<void>) {
@@ -256,7 +320,11 @@ export function WorkspaceClient({
           <div className="divide-y divide-slate-200">
             {articles.length > 0 ? (
               articles.map((article) => (
-                <ArticleRow article={article} key={article.id} />
+                <ArticleRow
+                  article={article}
+                  key={article.id}
+                  onOpenArticle={openArticleDetail}
+                />
               ))
             ) : (
               <p className="p-5 text-sm text-slate-500">
@@ -266,6 +334,33 @@ export function WorkspaceClient({
           </div>
         </section>
       </section>
+      <DetailDrawer
+        error={detailError}
+        loading={detailLoading}
+        onClose={closeDetailDrawer}
+        open={detailKind !== null}
+        subtitle={detailKind === "entity" ? "Entity card" : "Article card"}
+        title={
+          detailKind === "entity"
+            ? entityDetail?.label ?? "Entity details"
+            : articleDetail?.title ?? "Article details"
+        }
+      >
+        {detailKind === "entity" && entityDetail ? (
+          <EntityDetailContent
+            detail={entityDetail}
+            onOpenArticle={openArticleDetail}
+            onOpenEntity={openEntityDetail}
+          />
+        ) : null}
+        {detailKind === "article" && articleDetail ? (
+          <ArticleDetailContent
+            detail={articleDetail}
+            onOpenArticle={openArticleDetail}
+            onOpenEntity={openEntityDetail}
+          />
+        ) : null}
+      </DetailDrawer>
     </main>
   );
 }
@@ -354,7 +449,13 @@ function FeedRow({
   );
 }
 
-function ArticleRow({ article }: { article: ArticleFeedItem }) {
+function ArticleRow({
+  article,
+  onOpenArticle,
+}: {
+  article: ArticleFeedItem;
+  onOpenArticle: (articleLabelId: string) => Promise<void>;
+}) {
   return (
     <article className="p-5">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -424,14 +525,23 @@ function ArticleRow({ article }: { article: ArticleFeedItem }) {
           <span>{article.duplicateCount} duplicates</span>
           <span>{article.similarCount} similar</span>
         </div>
-        <a
-          className="font-medium text-slate-800 underline underline-offset-2"
-          href={article.originalUrl}
-          rel="noreferrer"
-          target="_blank"
-        >
-          Original
-        </a>
+        <div className="flex items-center gap-3">
+          <button
+            className="font-medium text-emerald-700 underline underline-offset-2"
+            type="button"
+            onClick={() => void onOpenArticle(article.id)}
+          >
+            Details
+          </button>
+          <a
+            className="font-medium text-slate-800 underline underline-offset-2"
+            href={article.originalUrl}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Original
+          </a>
+        </div>
       </div>
     </article>
   );

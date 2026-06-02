@@ -104,6 +104,32 @@ export interface ArticleFeedResponse {
   items: ArticleFeedItem[];
 }
 
+export interface DuplicateSource {
+  feedId: string;
+  originalUrl: string;
+  pulledAt: string;
+  sourceTitle: string;
+  sourceUrl: string;
+}
+
+export interface SimilarArticleSummary {
+  articleId: string;
+  articleLabelId: string | null;
+  importance: ArticleImportance | null;
+  kind: string;
+  publishedAt: string | null;
+  score: number | null;
+  similarityId: string;
+  summary: string | null;
+  title: string;
+}
+
+export interface ArticleDetail extends ArticleFeedItem {
+  articleId: string;
+  duplicateSources: DuplicateSource[];
+  similarArticles: SimilarArticleSummary[];
+}
+
 export type GraphNodeKind = "article" | "entity";
 
 export type GraphEdgeKind = "mentions" | "co_mention" | "similar";
@@ -153,4 +179,42 @@ export interface GraphEdge {
 export interface GraphResponse {
   edges: GraphEdge[];
   nodes: GraphNode[];
+}
+
+export interface EntityMentionArticle {
+  articleId: string;
+  articleLabelId: string;
+  categories: Array<{
+    id: string;
+    name: string;
+  }>;
+  importance: ArticleImportance | null;
+  publishedAt: string | null;
+  summary: string | null;
+  title: string;
+}
+
+export interface RelatedEntity {
+  description: string | null;
+  entityId: string;
+  entityType: string;
+  label: string;
+  weight: number;
+}
+
+export interface EntityDetail {
+  aliases: string[];
+  articleCount: number;
+  description: string | null;
+  entityId: string;
+  entityType: string;
+  firstSeen: number | null;
+  label: string;
+  lastSeen: number | null;
+  mentionActivity: Array<{
+    count: number;
+    date: string;
+  }>;
+  mentioningArticles: EntityMentionArticle[];
+  relatedEntities: RelatedEntity[];
 }
