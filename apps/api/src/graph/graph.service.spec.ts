@@ -1,13 +1,22 @@
-import { ArticleImportance, GraphEdgeKind } from '@prisma/client';
+import { ArticleImportance, EntityType, GraphEdgeKind } from '@prisma/client';
 import { GraphService } from './graph.service';
 
 describe('GraphService', () => {
   const findLabels = jest.fn<Promise<unknown[]>, [Record<string, unknown>]>();
   const findEdges = jest.fn<Promise<unknown[]>, [Record<string, unknown>]>();
+  const findEntity = jest.fn<
+    Promise<Record<string, unknown> | null>,
+    [Record<string, unknown>]
+  >();
+  const findEntities = jest.fn<Promise<unknown[]>, [Record<string, unknown>]>();
 
   const database = {
     articleLabel: {
       findMany: findLabels,
+    },
+    entity: {
+      findFirst: findEntity,
+      findMany: findEntities,
     },
     graphEdge: {
       findMany: findEdges,
@@ -166,5 +175,114 @@ describe('GraphService', () => {
       }),
     ]);
     expect(graph.edges).toEqual([]);
+  });
+
+  it('returns tenant-scoped entity detail with mentions, related entities, and activity buckets', async () => {
+    findEntity.mockResolvedValue({
+      aliases: ['MSFT'],
+      canonicalName: 'Microsoft',
+      description: 'Cloud platform company.',
+      firstSeen: 1_780_000_000,
+      id: 'entity_ms',
+      lastSeen: 1_780_214_400,
+      mentions: [
+        {
+          articleLabel: {
+            article: {
+              id: 'article_1',
+              publishedAt: new Date('2026-05-31T07:00:00.000Z'),
+              title: 'Microsoft ships Azure AI runtime update',
+            },
+            categories: [
+              { category: { id: 'cat_ai', name: 'AI infrastructure' } },
+            ],
+            id: 'label_1',
+            importance: ArticleImportance.HIGH,
+            processedAt: new Date('2026-05-31T07:05:00.000Z'),
+            summary: 'Microsoft shipped an Azure AI runtime update.',
+          },
+        },
+        {
+          articleLabel: {
+            article: {
+              id: 'article_2',
+              publishedAt: new Date('2026-05-31T18:00:00.000Z'),
+              title: 'Microsoft expands developer tools',
+            },
+            categories: [{ category: { id: 'cat_dev', name: 'DevTools' } }],
+            id: 'label_2',
+            importance: ArticleImportance.NORMAL,
+            processedAt: new Date('2026-05-31T18:05:00.000Z'),
+            summary: 'Microsoft expanded developer tooling.',
+          },
+        },
+      ],
+      type: EntityType.COMPANY,
+    });
+    findEdges.mockResolvedValue([
+      {
+        categoryId: 'cat_ai',
+        fromNodeId: 'entity:entity_ms',
+        id: 'edge_related',
+        kind: GraphEdgeKind.CO_MENTION,
+        score: null,
+        toNodeId: 'entity:entity_azure',
+        ts: 1_780_214_400,
+        weight: 3,
+      },
+    ]);
+    findEntities.mockResolvedValue([
+      {
+        aliases: [],
+        canonicalName: 'Azure AI runtime',
+        description: 'Runtime product.',
+        firstSeen: 1_780_214_400,
+        id: 'entity_azure',
+        lastSeen: 1_780_214_400,
+        type: EntityType.PRODUCT,
+      },
+    ]);
+    const service = new GraphService(database as never);
+
+    const detail = await service.getEntityDetail('user_1', 'entity_ms');
+    const entityCall = findEntity.mock.calls[0]?.[0];
+
+    expect(entityCall?.where).toEqual({ id: 'entity_ms', userId: 'user_1' });
+    expect(detail).toEqual(
+      expect.objectContaining({
+        aliases: ['MSFT'],
+        articleCount: 2,
+        entityId: 'entity_ms',
+        entityType: EntityType.COMPANY,
+        label: 'Microsoft',
+      }),
+    );
+    expect(detail.mentioningArticles).toEqual([
+      expect.objectContaining({
+        articleLabelId: 'label_1',
+        title: 'Microsoft ships Azure AI runtime update',
+      }),
+      expect.objectContaining({
+        articleLabelId: 'label_2',
+        title: 'Microsoft expands developer tools',
+      }),
+    ]);
+    expect(detail.relatedEntities).toEqual([
+      expect.objectContaining({
+        entityId: 'entity_azure',
+        label: 'Azure AI runtime',
+        weight: 3,
+      }),
+    ]);
+    expect(detail.mentionActivity).toEqual([{ date: '2026-05-31', count: 2 }]);
+  });
+
+  it('rejects entity detail access for entities outside the current user scope', async () => {
+    findEntity.mockResolvedValue(null);
+    const service = new GraphService(database as never);
+
+    await expect(
+      service.getEntityDetail('user_1', 'entity_other'),
+    ).rejects.toThrow('Entity was not found.');
   });
 });

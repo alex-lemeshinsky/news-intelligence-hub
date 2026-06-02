@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   ArticleImportance,
   ArticleProcessingStatus,
@@ -91,6 +91,69 @@ export class GraphService {
       nodes: filteredNodes,
     };
   }
+
+  async getEntityDetail(
+    userId: string,
+    entityId: string,
+  ): Promise<EntityDetail> {
+    const entity = await this.database.entity.findFirst({
+      include: {
+        mentions: {
+          include: {
+            articleLabel: {
+              include: {
+                article: true,
+                categories: {
+                  include: {
+                    category: true,
+                  },
+                },
+              },
+            },
+          },
+          where: {
+            articleLabel: {
+              userId,
+            },
+          },
+        },
+      },
+      where: {
+        id: entityId,
+        userId,
+      },
+    });
+
+    if (!entity) {
+      throw new NotFoundException('Entity was not found.');
+    }
+
+    const relatedEdges = (await this.database.graphEdge.findMany({
+      orderBy: [{ weight: 'desc' }],
+      where: {
+        OR: [
+          { fromNodeId: entityNodeIdFor(entity.id) },
+          { toNodeId: entityNodeIdFor(entity.id) },
+        ],
+        kind: GraphEdgeKind.CO_MENTION,
+        userId,
+      },
+    })) as GraphEdgeRecord[];
+    const relatedEntityIds = relatedEdges
+      .map((edge) => otherEntityId(edge, entity.id))
+      .filter((id): id is string => Boolean(id));
+    const relatedEntities =
+      relatedEntityIds.length === 0
+        ? []
+        : ((await this.database.entity.findMany({
+            where: {
+              id: { in: relatedEntityIds },
+              userId,
+            },
+          })) as RelatedEntityRecord[]);
+
+    return mapEntityDetail(entity, relatedEdges, relatedEntities);
+  }
 }
 
 export interface GraphFilters {
@@ -149,6 +212,40 @@ export interface GraphEdge {
   weight: number | null;
 }
 
+export interface EntityDetail {
+  aliases: string[];
+  articleCount: number;
+  description: string | null;
+  entityId: string;
+  entityType: EntityType;
+  firstSeen: number | null;
+  label: string;
+  lastSeen: number | null;
+  mentionActivity: Array<{
+    count: number;
+    date: string;
+  }>;
+  mentioningArticles: Array<{
+    articleId: string;
+    articleLabelId: string;
+    categories: Array<{
+      id: string;
+      name: string;
+    }>;
+    importance: ArticleImportance | null;
+    publishedAt: string | null;
+    summary: string | null;
+    title: string;
+  }>;
+  relatedEntities: Array<{
+    description: string | null;
+    entityId: string;
+    entityType: EntityType;
+    label: string;
+    weight: number;
+  }>;
+}
+
 interface ArticleLabelRecord {
   article: {
     id: string;
@@ -187,6 +284,42 @@ interface GraphEdgeRecord {
   toNodeId: string;
   ts: number | null;
   weight: number | null;
+}
+
+interface EntityDetailRecord {
+  aliases: string[];
+  canonicalName: string;
+  description: string | null;
+  firstSeen: number | null;
+  id: string;
+  lastSeen: number | null;
+  mentions: Array<{
+    articleLabel: {
+      article: {
+        id: string;
+        publishedAt: Date | null;
+        title: string;
+      };
+      categories: Array<{
+        category: {
+          id: string;
+          name: string;
+        };
+      }>;
+      id: string;
+      importance: ArticleImportance | null;
+      processedAt: Date | null;
+      summary: string | null;
+    };
+  }>;
+  type: EntityType;
+}
+
+interface RelatedEntityRecord {
+  canonicalName: string;
+  description: string | null;
+  id: string;
+  type: EntityType;
 }
 
 function buildLabelWhere(userId: string, filters: GraphFilters) {
@@ -281,6 +414,83 @@ function mapGraphEdge(edge: GraphEdgeRecord): GraphEdge {
   };
 }
 
+function mapEntityDetail(
+  entity: EntityDetailRecord,
+  relatedEdges: GraphEdgeRecord[],
+  relatedEntities: RelatedEntityRecord[],
+): EntityDetail {
+  const relatedById = new Map(relatedEntities.map((item) => [item.id, item]));
+  const mentioningArticles = entity.mentions.map((mention) => {
+    const label = mention.articleLabel;
+    return {
+      articleId: label.article.id,
+      articleLabelId: label.id,
+      categories: label.categories.map((assignment) => ({
+        id: assignment.category.id,
+        name: assignment.category.name,
+      })),
+      importance: label.importance,
+      publishedAt: label.article.publishedAt?.toISOString() ?? null,
+      summary: label.summary,
+      title: label.article.title,
+    };
+  });
+
+  return {
+    aliases: entity.aliases,
+    articleCount: mentioningArticles.length,
+    description: entity.description,
+    entityId: entity.id,
+    entityType: entity.type,
+    firstSeen: entity.firstSeen,
+    label: entity.canonicalName,
+    lastSeen: entity.lastSeen,
+    mentionActivity: buildMentionActivity(entity.mentions),
+    mentioningArticles,
+    relatedEntities: relatedEdges.flatMap((edge) => {
+      const relatedId = otherEntityId(edge, entity.id);
+      const related = relatedId ? relatedById.get(relatedId) : undefined;
+      if (!related) {
+        return [];
+      }
+
+      return [
+        {
+          description: related.description,
+          entityId: related.id,
+          entityType: related.type,
+          label: related.canonicalName,
+          weight: edge.weight ?? 0,
+        },
+      ];
+    }),
+  };
+}
+
+function buildMentionActivity(
+  mentions: EntityDetailRecord['mentions'],
+): EntityDetail['mentionActivity'] {
+  const counts = new Map<string, number>();
+
+  for (const mention of mentions) {
+    const date = (
+      mention.articleLabel.article.publishedAt ??
+      mention.articleLabel.processedAt
+    )
+      ?.toISOString()
+      .slice(0, 10);
+    if (!date) {
+      continue;
+    }
+
+    counts.set(date, (counts.get(date) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, count]) => ({ count, date }));
+}
+
 function mapEdgeKind(
   kind: GraphEdgeKind,
 ): 'mentions' | 'co_mention' | 'similar' {
@@ -299,6 +509,16 @@ function articleNodeIdFor(articleId: string): string {
 
 function entityNodeIdFor(entityId: string): string {
   return `entity:${entityId}`;
+}
+
+function otherEntityId(edge: GraphEdgeRecord, entityId: string): string | null {
+  const selectedNodeId = entityNodeIdFor(entityId);
+  const otherNodeId =
+    edge.fromNodeId === selectedNodeId ? edge.toNodeId : edge.fromNodeId;
+
+  return otherNodeId.startsWith('entity:')
+    ? otherNodeId.slice('entity:'.length)
+    : null;
 }
 
 function timestampSeconds(value: Date | null): number | null {

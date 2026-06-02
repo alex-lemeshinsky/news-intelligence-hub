@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import type { AuthUser } from '../auth/auth.service';
 import { CookieAuthGuard } from '../auth/cookie-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -19,6 +19,14 @@ export class GraphController {
   @Get()
   getGraph(@CurrentUser() user: AuthUser, @Query() query: GraphQuery) {
     return this.graphService.getGraph(user.id, normalizeQuery(query));
+  }
+
+  @Get('entities/:entityId')
+  getEntityDetail(
+    @CurrentUser() user: AuthUser,
+    @Param('entityId') entityId: string,
+  ) {
+    return this.graphService.getEntityDetail(user.id, entityId);
   }
 }
 

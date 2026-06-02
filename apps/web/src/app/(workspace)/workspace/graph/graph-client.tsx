@@ -10,10 +10,17 @@ import ReactFlow, {
   type Node,
   type OnError,
 } from "reactflow";
+import { DetailDrawer } from "@/components/workspace/detail-drawer";
+import {
+  ArticleDetailContent,
+  EntityDetailContent,
+} from "@/components/workspace/intelligence-detail-content";
 import { browserApiFetch } from "@/lib/api/browser";
 import { ApiError } from "@/lib/api/shared";
 import type {
+  ArticleDetail,
   Category,
+  EntityDetail,
   GraphArticleNode,
   GraphEdge,
   GraphEntityNode,
@@ -39,8 +46,6 @@ interface FlowNodeData {
   label: string;
 }
 
-const FLOW_EDGE_TYPES = {};
-const FLOW_NODE_TYPES = {};
 const FLOW_PRO_OPTIONS = { hideAttribution: true };
 const handleReactFlowError: OnError = (id, message) => {
   if (id !== "002") {
@@ -59,6 +64,15 @@ export function GraphClient({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detailKind, setDetailKind] = useState<"article" | "entity" | null>(
+    null,
+  );
+  const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(
+    null,
+  );
+  const [entityDetail, setEntityDetail] = useState<EntityDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const selectedNode =
     graph.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const flowNodes = useMemo(() => buildFlowNodes(graph.nodes), [graph.nodes]);
@@ -108,8 +122,66 @@ export function GraphClient({
     }
   }
 
+  async function openArticleDetail(articleLabelId: string) {
+    setDetailKind("article");
+    setArticleDetail(null);
+    setEntityDetail(null);
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      setArticleDetail(
+        await browserApiFetch<ArticleDetail>(`/articles/${articleLabelId}`),
+      );
+    } catch (detailFetchError) {
+      setDetailError(
+        detailFetchError instanceof ApiError
+          ? detailFetchError.message
+          : "Article details failed to load.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function openEntityDetail(entityId: string) {
+    setDetailKind("entity");
+    setArticleDetail(null);
+    setEntityDetail(null);
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      setEntityDetail(
+        await browserApiFetch<EntityDetail>(`/graph/entities/${entityId}`),
+      );
+    } catch (detailFetchError) {
+      setDetailError(
+        detailFetchError instanceof ApiError
+          ? detailFetchError.message
+          : "Entity details failed to load.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeDetailDrawer() {
+    setDetailKind(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  }
+
   function selectFlowNode(_event: MouseEvent, node: Node<FlowNodeData>) {
     setSelectedNodeId(node.id);
+    const graphNode = graph.nodes.find((item) => item.id === node.id);
+    if (!graphNode) {
+      return;
+    }
+
+    if (graphNode.kind === "article") {
+      void openArticleDetail(graphNode.articleLabelId);
+    } else {
+      void openEntityDetail(graphNode.entityId);
+    }
   }
 
   return (
@@ -156,12 +228,10 @@ export function GraphClient({
         <div className="h-[520px] min-h-[460px] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:h-[680px]">
           {graph.nodes.length > 0 ? (
             <ReactFlow
-              edgeTypes={FLOW_EDGE_TYPES}
               edges={flowEdges}
               fitView
               maxZoom={1.5}
               minZoom={0.25}
-              nodeTypes={FLOW_NODE_TYPES}
               nodes={flowNodes}
               onError={handleReactFlowError}
               onNodeClick={selectFlowNode}
@@ -193,6 +263,33 @@ export function GraphClient({
         </div>
         <GraphDetailPanel node={selectedNode} />
       </section>
+      <DetailDrawer
+        error={detailError}
+        loading={detailLoading}
+        onClose={closeDetailDrawer}
+        open={detailKind !== null}
+        subtitle={detailKind === "entity" ? "Entity card" : "Article card"}
+        title={
+          detailKind === "entity"
+            ? entityDetail?.label ?? "Entity details"
+            : articleDetail?.title ?? "Article details"
+        }
+      >
+        {detailKind === "entity" && entityDetail ? (
+          <EntityDetailContent
+            detail={entityDetail}
+            onOpenArticle={openArticleDetail}
+            onOpenEntity={openEntityDetail}
+          />
+        ) : null}
+        {detailKind === "article" && articleDetail ? (
+          <ArticleDetailContent
+            detail={articleDetail}
+            onOpenArticle={openArticleDetail}
+            onOpenEntity={openEntityDetail}
+          />
+        ) : null}
+      </DetailDrawer>
     </main>
   );
 }

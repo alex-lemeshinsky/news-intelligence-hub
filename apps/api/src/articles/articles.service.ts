@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ArticleImportance, ArticleProcessingStatus } from '@prisma/client';
 import { DatabaseService } from '../database/database.service';
 
@@ -53,6 +53,77 @@ export class ArticlesService {
       items: labels.map(mapArticleLabel),
     };
   }
+
+  async getDetail(userId: string, articleLabelId: string) {
+    const label = await this.database.articleLabel.findFirst({
+      include: {
+        article: {
+          include: {
+            feedItems: {
+              include: {
+                feed: true,
+              },
+              orderBy: { pulledAt: 'desc' },
+              where: {
+                feed: {
+                  userId,
+                },
+              },
+            },
+            similaritySource: {
+              include: {
+                similarArticle: {
+                  include: {
+                    labels: {
+                      where: { userId },
+                    },
+                  },
+                },
+              },
+              where: { userId },
+            },
+            similarityTarget: {
+              include: {
+                article: {
+                  include: {
+                    labels: {
+                      where: { userId },
+                    },
+                  },
+                },
+              },
+              where: { userId },
+            },
+          },
+        },
+        axes: {
+          include: {
+            axis: true,
+          },
+        },
+        categories: {
+          include: {
+            category: true,
+          },
+        },
+        mentions: {
+          include: {
+            entity: true,
+          },
+        },
+      },
+      where: {
+        id: articleLabelId,
+        userId,
+      },
+    });
+
+    if (!label) {
+      throw new NotFoundException('Article was not found.');
+    }
+
+    return mapArticleDetail(label);
+  }
 }
 
 export interface ArticleListFilters {
@@ -106,6 +177,73 @@ interface ArticleLabelRecord {
   preFilterReason: string | null;
   status: ArticleProcessingStatus;
   summary: string | null;
+}
+
+interface ArticleDetailRecord {
+  article: {
+    canonicalUrl: string | null;
+    feedItems: Array<{
+      feed: {
+        id: string;
+        title: string | null;
+        url: string;
+      };
+      originalUrl: string;
+      pulledAt: Date;
+    }>;
+    id: string;
+    normalizedUrl: string;
+    publishedAt: Date | null;
+    similaritySource: Array<{
+      id: string;
+      kind: string;
+      score: number | null;
+      similarArticle: SimilarArticleRecord;
+    }>;
+    similarityTarget: Array<{
+      id: string;
+      kind: string;
+      score: number | null;
+      article: SimilarArticleRecord;
+    }>;
+    title: string;
+  };
+  axes: Array<{
+    axis: {
+      id: string;
+      name: string;
+    };
+    value: string;
+  }>;
+  categories: Array<{
+    category: {
+      id: string;
+      name: string;
+    };
+  }>;
+  id: string;
+  importance: ArticleImportance | null;
+  mentions: Array<{
+    entity: {
+      canonicalName: string;
+      id: string;
+      type: string;
+    };
+  }>;
+  preFilterReason: string | null;
+  status: ArticleProcessingStatus;
+  summary: string | null;
+}
+
+interface SimilarArticleRecord {
+  id: string;
+  labels: Array<{
+    id: string;
+    importance: ArticleImportance | null;
+    summary: string | null;
+  }>;
+  publishedAt: Date | null;
+  title: string;
 }
 
 function buildWhere(userId: string, filters: ArticleListFilters) {
@@ -204,5 +342,61 @@ function mapArticleLabel(label: ArticleLabelRecord) {
     status: label.status,
     summary: label.summary,
     title: label.article.title,
+  };
+}
+
+function mapArticleDetail(label: ArticleDetailRecord) {
+  const feedCard = mapArticleLabel(label);
+  const duplicateSources = label.article.feedItems.map((feedItem) => ({
+    feedId: feedItem.feed.id,
+    originalUrl: feedItem.originalUrl,
+    pulledAt: feedItem.pulledAt,
+    sourceTitle: feedItem.feed.title ?? feedItem.feed.url,
+    sourceUrl: feedItem.feed.url,
+  }));
+  const similarArticles = [
+    ...label.article.similaritySource.map((similarity) =>
+      mapSimilarArticle(
+        similarity.id,
+        similarity.kind,
+        similarity.score,
+        similarity.similarArticle,
+      ),
+    ),
+    ...label.article.similarityTarget.map((similarity) =>
+      mapSimilarArticle(
+        similarity.id,
+        similarity.kind,
+        similarity.score,
+        similarity.article,
+      ),
+    ),
+  ];
+
+  return {
+    ...feedCard,
+    articleId: label.article.id,
+    duplicateSources,
+    similarArticles,
+  };
+}
+
+function mapSimilarArticle(
+  similarityId: string,
+  kind: string,
+  score: number | null,
+  article: SimilarArticleRecord,
+) {
+  const label = article.labels[0];
+  return {
+    articleId: article.id,
+    articleLabelId: label?.id ?? null,
+    importance: label?.importance ?? null,
+    kind,
+    publishedAt: article.publishedAt,
+    score,
+    similarityId,
+    summary: label?.summary ?? null,
+    title: article.title,
   };
 }
