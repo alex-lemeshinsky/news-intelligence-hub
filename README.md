@@ -28,8 +28,8 @@ cp .env.example .env
 
 ### Full stack (one command)
 
-Builds and runs everything; migrations are applied automatically before the API
-and worker start.
+Builds and runs everything; migrations are applied automatically, then demo data
+is loaded, before the API and worker start.
 
 ```bash
 docker compose -f docker-compose.full.yml up --build
@@ -51,10 +51,44 @@ with hot reload.
 docker compose up -d          # Postgres + Redis
 npm install
 npm run db:deploy             # apply migrations to the dev database
+npm run db:seed               # load demo data (optional but recommended)
 npm run dev:api               # http://localhost:3001
 npm run dev:web               # http://localhost:3000
 npm run dev:worker
 ```
+
+## Demo Data
+
+The full-stack flow seeds demo data automatically (a one-shot `seed` container
+that runs after migrations). For the development flow, run `npm run db:seed`.
+
+The seeder creates one confirmed demo user with a populated article feed and a
+ready-to-explore relationship graph, so a reviewer sees working data without
+configuring LLM keys or waiting for live feed pulls. Log in with the credentials
+from `.env` (`SEED_DEMO_EMAIL` / `SEED_DEMO_PASSWORD`); the defaults are:
+
+- Email: `demo@news-intelligence.local`
+- Password: `demo-password-change-me`
+
+These are development-only demo credentials, not real secrets. What the demo
+user gets:
+
+- Four feeds spanning every status (active, paused, and pull-error).
+- Fifteen articles: thirteen processed (with summaries, importance, categories,
+  axis labels, and extracted entities), one deterministically pre-filtered, one
+  LLM-labelled junk, and one still pending - so all processing states are
+  visible in the feed.
+- One GPT-5 article appears under two feed sources to demonstrate exact
+  duplicate counting, and a related GPT-5 article is linked semantically to
+  demonstrate the similar counter.
+- Fifteen entities (companies, people, products, technologies, locations) with
+  aliases, plus `mentions`, `co_mention`, and `similar` graph edges.
+
+The seeder is idempotent: it owns only the demo user and rebuilds that user's
+data on each run, never touching other accounts. Set `SEED_DEMO_DATA=false` in
+`.env` to skip it. Note that re-labelling demo articles via the regeneration
+action still requires a valid LLM provider key, since the demo data is inserted
+directly rather than produced by the analysis pipeline.
 
 ## Initial Scripts
 
@@ -75,6 +109,8 @@ npm run dev:worker
 - `npm run lint:database`: type-check the database package.
 - `npm run test:api`: run API unit tests.
 - `npm run db:generate`: generate the Prisma client from `packages/database/prisma/schema.prisma`.
+- `npm run db:deploy`: apply committed migrations to the database.
+- `npm run db:seed`: build the database package and load demo data (see Demo Data).
 
 ## Auth Flow
 

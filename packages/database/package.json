@@ -14,13 +14,19 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "generate": "prisma generate",
-    "migrate": "prisma migrate dev",
-    "deploy": "prisma migrate deploy",
+    "generate": "node --env-file-if-exists=../../.env ../../node_modules/prisma/build/index.js generate",
+    "migrate": "node --env-file-if-exists=../../.env ../../node_modules/prisma/build/index.js migrate dev",
+    "deploy": "node --env-file-if-exists=../../.env ../../node_modules/prisma/build/index.js migrate deploy",
+    "test": "npm run build && node --test dist/*.spec.js",
+    "seed": "node --env-file-if-exists=../../.env dist/seed.js",
     "studio": "prisma studio"
   },
+  "prisma": {
+    "seed": "node --env-file-if-exists=../../.env dist/seed.js"
+  },
   "dependencies": {
-    "@prisma/client": "^6.19.1"
+    "@prisma/client": "^6.19.1",
+    "argon2": "^0.44.0"
   },
   "devDependencies": {
     "prisma": "^6.19.1",

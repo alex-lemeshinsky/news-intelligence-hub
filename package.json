@@ -7,7 +7,7 @@
     "build": "npm run build:shared && npm run build:database && npm run build:api && npm run build:web && npm run build:worker",
     "lint": "npm run lint:shared && npm run lint:database && npm run lint:api && npm run lint:web && npm run lint:worker",
     "lint:ci": "npm run build:shared && npm run build:database && npm run lint:shared && npm run lint:database && npm --prefix apps/api run lint:ci && npm run lint:web && npm run lint:worker",
-    "test": "npm run test:api && npm run test:worker",
+    "test": "npm run test:database && npm run test:api && npm run test:worker",
     "dev:api": "PORT=3001 npm --prefix apps/api run start:dev",
     "dev:web": "npm --prefix apps/web run dev",
     "dev:worker": "npm --prefix apps/worker run dev",
@@ -22,11 +22,13 @@
     "lint:shared": "npm --prefix packages/shared run lint",
     "lint:database": "npm --prefix packages/database run lint",
     "test:api": "npm --prefix apps/api run test",
+    "test:database": "npm --prefix packages/database run test",
     "test:worker": "npm --prefix apps/worker run test",
     "test:e2e:api": "npm --prefix apps/api run test:e2e",
     "db:generate": "npm --prefix packages/database run generate",
     "db:migrate": "npm --prefix packages/database run migrate",
     "db:deploy": "npm --prefix packages/database run deploy",
+    "db:seed": "npm --prefix packages/database run build && npm --prefix packages/database run seed",
     "db:studio": "npm --prefix packages/database run studio"
   },
   "workspaces": [
