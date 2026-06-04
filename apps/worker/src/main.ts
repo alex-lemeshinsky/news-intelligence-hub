@@ -12,6 +12,10 @@ import type { FeedPullDatabase } from './feed-pull.processor.js';
 import { createConfiguredLlmClient } from './llm-client.js';
 import { handleQueueJob } from './processors.js';
 
+if (!process.env.DATABASE_URL?.trim()) {
+  throw new Error('DATABASE_URL is required to start the worker.');
+}
+
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const connection = new Redis(redisUrl, {
   maxRetriesPerRequest: null,

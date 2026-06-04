@@ -6,7 +6,7 @@
   "main": "dist/main.js",
   "scripts": {
     "predev": "npm --prefix ../../packages/shared run build && npm --prefix ../../packages/database run build",
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --env-file=../../.env src/main.ts",
     "prebuild": "npm --prefix ../../packages/shared run build && npm --prefix ../../packages/database run build",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
