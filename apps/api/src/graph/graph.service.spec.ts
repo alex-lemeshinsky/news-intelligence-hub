@@ -177,6 +177,84 @@ describe('GraphService', () => {
     expect(graph.edges).toEqual([]);
   });
 
+  it('caps dense co-mention edges while keeping article mention edges', async () => {
+    const entities = Array.from({ length: 305 }, (_, index) => ({
+      entity: {
+        aliases: [],
+        canonicalName: `Entity ${index}`,
+        description: null,
+        firstSeen: null,
+        id: `entity_${index}`,
+        lastSeen: null,
+        type: EntityType.COMPANY,
+      },
+    }));
+    findLabels.mockResolvedValue([
+      {
+        article: {
+          id: 'article_1',
+          publishedAt: null,
+          title: 'Dense graph article',
+        },
+        categories: [],
+        id: 'label_1',
+        importance: null,
+        mentions: entities,
+        status: 'PROCESSED',
+        summary: null,
+      },
+    ]);
+    findEdges.mockResolvedValue([
+      {
+        categoryId: null,
+        fromNodeId: 'article:article_1',
+        id: 'mention_edge',
+        kind: GraphEdgeKind.MENTIONS,
+        score: null,
+        toNodeId: 'entity:entity_0',
+        ts: null,
+        weight: 1,
+      },
+      ...Array.from({ length: 305 }, (_, index) => ({
+        categoryId: null,
+        fromNodeId: `entity:entity_${index}`,
+        id: `co_edge_${index}`,
+        kind: GraphEdgeKind.CO_MENTION,
+        score: null,
+        toNodeId: `entity:entity_${(index + 1) % 305}`,
+        ts: null,
+        weight: 305 - index,
+      })),
+    ]);
+    const service = new GraphService(database as never);
+
+    const graph = await service.getGraph('user_1', {});
+    const coMentionEdges = graph.edges.filter(
+      (edge) => edge.kind === 'co_mention',
+    );
+
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          edgeId: 'mention_edge',
+          kind: 'mentions',
+        }),
+      ]),
+    );
+    expect(coMentionEdges).toHaveLength(300);
+    expect(coMentionEdges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ edgeId: 'co_edge_0' }),
+        expect.objectContaining({ edgeId: 'co_edge_299' }),
+      ]),
+    );
+    expect(coMentionEdges).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ edgeId: 'co_edge_300' }),
+      ]),
+    );
+  });
+
   it('returns tenant-scoped entity detail with mentions, related entities, and activity buckets', async () => {
     findEntity.mockResolvedValue({
       aliases: ['MSFT'],

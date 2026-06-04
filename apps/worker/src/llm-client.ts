@@ -369,11 +369,75 @@ function readAnthropicUsage(value: unknown): LlmUsage {
 }
 
 function parseJsonObject(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error('LLM response was not valid JSON.');
+  for (const candidate of jsonCandidates(text)) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next candidate before rejecting the provider response.
+    }
   }
+
+  throw new Error('LLM response was not valid JSON.');
+}
+
+function jsonCandidates(text: string): string[] {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const fencedJson = stripMarkdownFence(trimmed);
+  if (fencedJson) {
+    candidates.push(fencedJson);
+  }
+
+  const embeddedJson = extractFirstJsonObject(trimmed);
+  if (embeddedJson) {
+    candidates.push(embeddedJson);
+  }
+
+  return [...new Set(candidates)];
+}
+
+function stripMarkdownFence(text: string): string | null {
+  const match = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return match?.[1]?.trim() ?? null;
+}
+
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = inString;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
 }
 
 function normalizeEntity(value: unknown): ArticleAnalysisEntity {

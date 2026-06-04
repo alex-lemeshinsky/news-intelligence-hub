@@ -7,6 +7,8 @@ import {
 } from '@prisma/client';
 import { DatabaseService } from '../database/database.service';
 
+const MAX_CO_MENTION_EDGES = 300;
+
 @Injectable()
 export class GraphService {
   constructor(private readonly database: DatabaseService) {}
@@ -78,13 +80,13 @@ export class GraphService {
       orderBy: [{ kind: 'asc' }, { weight: 'desc' }],
       where: buildEdgeWhere(userId, filters),
     });
-    const edges = (graphEdges as GraphEdgeRecord[])
-      .filter(
+    const edges = limitDenseEdges(
+      (graphEdges as GraphEdgeRecord[]).filter(
         (edge) =>
           visibleNodeIds.has(edge.fromNodeId) &&
           visibleNodeIds.has(edge.toNodeId),
-      )
-      .map(mapGraphEdge);
+      ),
+    ).map(mapGraphEdge);
 
     return {
       edges,
@@ -399,6 +401,24 @@ function filterNodes(nodes: GraphNode[], filters: GraphFilters): GraphNode[] {
   }
 
   return nodes.filter((node) => node.kind === filters.nodeKind);
+}
+
+function limitDenseEdges(edges: GraphEdgeRecord[]): GraphEdgeRecord[] {
+  let coMentionCount = 0;
+  const limitedEdges: GraphEdgeRecord[] = [];
+
+  for (const edge of edges) {
+    if (edge.kind === GraphEdgeKind.CO_MENTION) {
+      if (coMentionCount >= MAX_CO_MENTION_EDGES) {
+        continue;
+      }
+      coMentionCount += 1;
+    }
+
+    limitedEdges.push(edge);
+  }
+
+  return limitedEdges;
 }
 
 function mapGraphEdge(edge: GraphEdgeRecord): GraphEdge {
