@@ -6,6 +6,9 @@ import { ApiError } from "@/lib/api/shared";
 import type {
   Category,
   ClassificationAxis,
+  LlmTelemetryOverview,
+  LlmTelemetryOperationSummary,
+  LlmTelemetryProviderModelSummary,
   RegenerationRun,
 } from "@/lib/api/types";
 
@@ -13,6 +16,7 @@ interface SettingsClientProps {
   initialAxes: ClassificationAxis[];
   initialCategories: Category[];
   initialRun: RegenerationRun | null;
+  initialTelemetry: LlmTelemetryOverview;
 }
 
 interface AxisDraft {
@@ -24,10 +28,12 @@ export function SettingsClient({
   initialAxes,
   initialCategories,
   initialRun,
+  initialTelemetry,
 }: SettingsClientProps) {
   const [axes, setAxes] = useState(initialAxes);
   const [categories, setCategories] = useState(initialCategories);
   const [latestRun, setLatestRun] = useState(initialRun);
+  const [telemetry, setTelemetry] = useState(initialTelemetry);
   const [drafts, setDrafts] = useState(() => buildDrafts(initialAxes));
   const [categoryDrafts, setCategoryDrafts] = useState(() =>
     buildCategoryDrafts(initialCategories),
@@ -59,11 +65,18 @@ export function SettingsClient({
     setCategoryDrafts(buildCategoryDrafts(nextCategories));
   }
 
-  async function refreshLatestRun() {
+  async function refreshLatestRun(): Promise<RegenerationRun | null> {
     const run = await browserApiFetch<RegenerationRun | null>(
       "/axes/regeneration-runs/latest",
     );
     setLatestRun(run);
+    return run;
+  }
+
+  async function refreshTelemetry() {
+    const nextTelemetry =
+      await browserApiFetch<LlmTelemetryOverview>("/telemetry/llm");
+    setTelemetry(nextTelemetry);
   }
 
   useEffect(() => {
@@ -72,7 +85,11 @@ export function SettingsClient({
     }
 
     const intervalId = window.setInterval(() => {
-      void refreshLatestRun();
+      void refreshLatestRun().then((run) => {
+        if (run?.status === "COMPLETED" || run?.status === "FAILED") {
+          void refreshTelemetry();
+        }
+      });
     }, 2500);
 
     return () => window.clearInterval(intervalId);
@@ -338,6 +355,7 @@ export function SettingsClient({
             pending={pendingAction === "regeneration:start"}
             onStart={startRegeneration}
           />
+          <TelemetryPanel telemetry={telemetry} />
         </aside>
       </section>
     </main>
@@ -538,6 +556,145 @@ function ProgressMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function TelemetryPanel({
+  telemetry,
+}: {
+  telemetry: LlmTelemetryOverview;
+}) {
+  return (
+    <section className="mt-6 border-t border-slate-200 pt-5">
+      <div>
+        <h2 className="text-base font-semibold text-slate-950">
+          LLM telemetry
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-slate-600">
+          Calls and token totals for queued semantic work.
+        </p>
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <ProgressMetric label="Calls" value={telemetry.totals.calls} />
+        <ProgressMetric label="Tokens" value={telemetry.totals.totalTokens} />
+        <ProgressMetric
+          label="Avg ms"
+          value={telemetry.totals.averageLatencyMs}
+        />
+      </div>
+      <TokenTotals totals={telemetry.totals} />
+      <OperationTelemetry rows={telemetry.byOperation} />
+      <ProviderTelemetry rows={telemetry.byProviderModel} />
+    </section>
+  );
+}
+
+function TokenTotals({
+  totals,
+}: {
+  totals: LlmTelemetryOverview["totals"];
+}) {
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-slate-600">Prompt</span>
+        <span className="font-semibold text-slate-950">
+          {formatNumber(totals.promptTokens)}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-slate-600">Completion</span>
+        <span className="font-semibold text-slate-950">
+          {formatNumber(totals.completionTokens)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function OperationTelemetry({
+  rows,
+}: {
+  rows: LlmTelemetryOperationSummary[];
+}) {
+  return (
+    <div className="mt-5">
+      <h3 className="text-xs font-semibold uppercase text-slate-500">
+        Operations
+      </h3>
+      <div className="mt-2 space-y-2">
+        {rows.length > 0 ? (
+          rows.map((row) => (
+            <TelemetryRow
+              detail={row.success ? "successful" : "failed"}
+              key={`${row.operation}:${row.success}`}
+              label={labelFromEnum(row.operation)}
+              tokens={row.totalTokens}
+              value={row.calls}
+            />
+          ))
+        ) : (
+          <p className="rounded-md border border-dashed border-slate-300 p-3 text-sm text-slate-500">
+            No LLM calls recorded yet.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProviderTelemetry({
+  rows,
+}: {
+  rows: LlmTelemetryProviderModelSummary[];
+}) {
+  return rows.length > 0 ? (
+    <div className="mt-5">
+      <h3 className="text-xs font-semibold uppercase text-slate-500">
+        Providers
+      </h3>
+      <div className="mt-2 space-y-2">
+        {rows.map((row) => (
+          <TelemetryRow
+            detail={row.model}
+            key={`${row.provider}:${row.model}`}
+            label={labelFromEnum(row.provider)}
+            tokens={row.totalTokens}
+            value={row.calls}
+          />
+        ))}
+      </div>
+    </div>
+  ) : null;
+}
+
+function TelemetryRow({
+  detail,
+  label,
+  tokens,
+  value,
+}: {
+  detail: string;
+  label: string;
+  tokens: number;
+  value: number;
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 px-3 py-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-slate-950">{label}</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">{detail}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-semibold text-slate-950">{value}</p>
+          <p className="mt-0.5 text-xs text-slate-500">calls</p>
+        </div>
+      </div>
+      <p className="mt-2 text-xs font-medium text-slate-600">
+        {formatNumber(tokens)} tokens
+      </p>
+    </div>
+  );
+}
+
 function TextInput({
   label,
   onChange,
@@ -618,4 +775,16 @@ function runStatusClass(status: RegenerationRun["status"]): string {
     return `${base} bg-blue-50 text-blue-700`;
   }
   return `${base} bg-slate-100 text-slate-600`;
+}
+
+function labelFromEnum(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
 }

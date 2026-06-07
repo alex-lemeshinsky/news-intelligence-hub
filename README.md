@@ -83,6 +83,8 @@ user gets:
   demonstrate the similar counter.
 - Fifteen entities (companies, people, products, technologies, locations) with
   aliases, plus `mentions`, `co_mention`, and `similar` graph edges.
+- Seeded LLM telemetry rows for article analysis, regeneration, and digest
+  operations, so the settings dashboard shows nonzero calls and token totals.
 
 The seeder is idempotent: it owns only the demo user and rebuilds that user's
 data on each run, never touching other accounts. Set `SEED_DEMO_DATA=false` in

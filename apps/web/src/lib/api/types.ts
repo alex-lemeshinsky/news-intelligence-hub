@@ -63,6 +63,46 @@ export interface RegenerationRun {
   updatedAt: string;
 }
 
+export type LlmOperation =
+  | "ARTICLE_ANALYSIS"
+  | "ENTITY_MATCH"
+  | "DIGEST"
+  | "REGENERATION";
+
+export type LlmProvider = "OPENAI" | "ANTHROPIC";
+
+export interface LlmTelemetryTotals {
+  averageLatencyMs: number;
+  calls: number;
+  completionTokens: number;
+  promptTokens: number;
+  totalTokens: number;
+}
+
+export interface LlmTelemetryOperationSummary {
+  calls: number;
+  completionTokens: number;
+  operation: LlmOperation;
+  promptTokens: number;
+  success: boolean;
+  totalTokens: number;
+}
+
+export interface LlmTelemetryProviderModelSummary {
+  calls: number;
+  completionTokens: number;
+  model: string;
+  promptTokens: number;
+  provider: LlmProvider;
+  totalTokens: number;
+}
+
+export interface LlmTelemetryOverview {
+  byOperation: LlmTelemetryOperationSummary[];
+  byProviderModel: LlmTelemetryProviderModelSummary[];
+  totals: LlmTelemetryTotals;
+}
+
 export type ArticleProcessingStatus =
   | "PENDING"
   | "FILTERED"

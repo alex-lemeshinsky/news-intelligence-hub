@@ -6,6 +6,8 @@ import {
   EntityType,
   FeedStatus,
   GraphEdgeKind,
+  LlmOperation,
+  LlmProvider,
   PrismaClient,
   SimilarityKind,
 } from '@prisma/client';
@@ -29,9 +31,9 @@ import {
 //
 // Scope is intentionally limited to data the UI actually renders: feeds with
 // status, processed/filtered/pending article labels, category and axis
-// assignments, entities with aliases, mentions, similarity, and graph edges.
-// Telemetry/digest rows are not seeded because no read path surfaces them yet,
-// and seeding invisible rows would be dead data.
+// assignments, entities with aliases, mentions, similarity, graph edges, and
+// aggregate LLM telemetry for the settings dashboard. Digest rows are not
+// seeded yet because no read path surfaces them.
 
 const prisma = new PrismaClient();
 
@@ -377,6 +379,7 @@ async function main(): Promise<void> {
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     await prisma.articleSimilarity.deleteMany({ where: { userId: existing.id } });
+    await prisma.llmTelemetry.deleteMany({ where: { userId: existing.id } });
     await prisma.user.delete({ where: { id: existing.id } });
     console.log(JSON.stringify({ event: 'seed.reset', userId: existing.id }));
   }
@@ -605,6 +608,9 @@ async function main(): Promise<void> {
     });
   }
 
+  const telemetryRows = buildDemoTelemetryRows(user.id, now);
+  await prisma.llmTelemetry.createMany({ data: telemetryRows });
+
   const processedCount = ARTICLES.filter(
     (article) => article.status === ArticleProcessingStatus.PROCESSED,
   ).length;
@@ -618,8 +624,58 @@ async function main(): Promise<void> {
       articles: ARTICLES.length,
       processedArticles: processedCount,
       coMentionEdges: coMention.size,
+      telemetryRows: telemetryRows.length,
     }),
   );
+}
+
+function buildDemoTelemetryRows(userId: string, now: Date) {
+  const articleRows = ARTICLES.filter(
+    (article) => article.status === ArticleProcessingStatus.PROCESSED,
+  ).map((article, index) => {
+    const promptTokens = 860 + index * 19;
+    const completionTokens = 140 + index * 11;
+    return {
+      userId,
+      operation: LlmOperation.ARTICLE_ANALYSIS,
+      provider: LlmProvider.OPENAI,
+      model: 'gpt-5-mini',
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+      success: true,
+      latencyMs: 950 + index * 55,
+      createdAt: publishedAtForDaysAgo(article.daysAgo, now),
+    };
+  });
+
+  return [
+    ...articleRows,
+    {
+      userId,
+      operation: LlmOperation.REGENERATION,
+      provider: LlmProvider.ANTHROPIC,
+      model: 'claude-sonnet-4-5',
+      promptTokens: 2_400,
+      completionTokens: 410,
+      totalTokens: 2_810,
+      success: true,
+      latencyMs: 2_300,
+      createdAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+    },
+    {
+      userId,
+      operation: LlmOperation.DIGEST,
+      provider: LlmProvider.OPENAI,
+      model: 'gpt-5-mini',
+      promptTokens: 1_650,
+      completionTokens: 330,
+      totalTokens: 1_980,
+      success: true,
+      latencyMs: 1_620,
+      createdAt: new Date(now.getTime() - 6 * 60 * 60 * 1000),
+    },
+  ];
 }
 
 main()
