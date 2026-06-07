@@ -1,19 +1,35 @@
-# Development / debug flow: runs ONLY the backing services (Postgres + Redis).
-# The API, worker, and web run on the host with hot reload:
+# Full-stack startup: builds and runs the entire application (Postgres, Redis,
+# database migrations, API, worker, and web) with one command:
 #
-#   docker compose up -d            # start Postgres + Redis
-#   cp .env.example .env            # the localhost URLs in .env target these
-#   npm install
-#   npm run dev:api                 # http://localhost:3001
-#   npm run dev:web                 # http://localhost:3000
-#   npm run dev:worker
+#   cp .env.example .env   # fill in JWT_SECRET, BULL_BOARD_PASSWORD, LLM keys
+#   docker compose up --build
 #
-# For a fully containerized one-command startup, use docker-compose.full.yml.
+# Then open:
+#   - Web app:    http://localhost:3000
+#   - API:        http://localhost:3001
+#   - Bull Board: http://localhost:3001/admin/queues
+#
+# Container-to-container networking (DATABASE_URL, REDIS_URL, API_INTERNAL_BASE_URL)
+# is set here and overrides the localhost values in .env, so the same .env works
+# for both this flow and the host-based dev flow (docker-compose.dev.yml).
+#
+# Use docker-compose.dev.yml instead when running the apps on the host with
+# `npm run dev:*` against containerized Postgres/Redis only.
+
+name: news-intelligence-hub-full
+
+x-app-build: &app-build
+  build:
+    context: .
+    target: runtime
+  image: nih-app:latest
+
+x-db-url: &database-url
+  DATABASE_URL: postgresql://${POSTGRES_USER:-nih}:${POSTGRES_PASSWORD:-nih_password}@postgres:5432/${POSTGRES_DB:-news_intelligence_hub}?schema=public
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: nih-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-news_intelligence_hub}
@@ -24,25 +40,111 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nih} -d ${POSTGRES_DB:-news_intelligence_hub}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nih} -d ${POSTGRES_DB:-news_intelligence_hub}" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: nih-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: [ "redis-server", "--appendonly", "yes" ]
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # One-shot: apply Prisma migrations to a clean database before apps start.
+  migrate:
+    <<: *app-build
+    command: [ "npm", "--prefix", "packages/database", "run", "deploy" ]
+    env_file: .env
+    environment:
+      <<: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: load demo data after migrations so reviewers see a populated feed
+  # and graph immediately. Skips itself when SEED_DEMO_DATA=false.
+  seed:
+    <<: *app-build
+    command: [ "node", "packages/database/dist/seed.js" ]
+    env_file: .env
+    environment:
+      <<: *database-url
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: *app-build
+    command: [ "node", "apps/api/dist/main.js" ]
+    init: true
+    env_file: .env
+    environment:
+      <<: *database-url
+      NODE_ENV: production
+      PORT: "3001"
+      REDIS_URL: redis://redis:6379
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+    ports:
+      - "${API_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    <<: *app-build
+    command: [ "node", "apps/worker/dist/main.js" ]
+    init: true
+    env_file: .env
+    environment:
+      <<: *database-url
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    <<: *app-build
+    command: [ "npm", "--prefix", "apps/web", "run", "start" ]
+    init: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # Server-side rendering reaches the API over the compose network; the
+      # browser bundle uses the build-time NEXT_PUBLIC_API_BASE_URL (host port).
+      API_INTERNAL_BASE_URL: http://api:3001
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
 
 volumes:
   postgres_data:

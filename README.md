@@ -12,8 +12,8 @@ UA-Skills: News Intelligence Hub
 
 ## Infrastructure
 
-- `docker-compose.yml`: PostgreSQL and Redis for the host-based development flow.
-- `docker-compose.full.yml`: full containerized stack (Postgres, Redis, API, worker, web, and a one-shot migration step).
+- `docker-compose.yml`: full containerized stack (Postgres, Redis, API, worker, web, and one-shot migration/seed steps).
+- `docker-compose.dev.yml`: PostgreSQL and Redis for the host-based development flow.
 - `Dockerfile`: single multi-stage image that builds the whole monorepo and runs the API, worker, web, and migration commands.
 - `.env.example`: documented environment variables for the app, database, Redis, Bull Board, auth, LLM providers, and feed processing.
 
@@ -32,15 +32,15 @@ Builds and runs everything; migrations are applied automatically, then demo data
 is loaded, before the API and worker start.
 
 ```bash
-docker compose -f docker-compose.full.yml up --build
+docker compose up --build
 ```
 
 - Web app: `http://localhost:3000`
 - API: `http://localhost:3001`
 - Bull Board: `http://localhost:3001/admin/queues`
 
-Stop with `docker compose -f docker-compose.full.yml down` (add `-v` to drop the
-database and Redis volumes).
+Stop with `docker compose down` (add `-v` to drop the database and Redis
+volumes).
 
 ### Development / debug
 
@@ -48,7 +48,7 @@ Runs only Postgres and Redis in Docker; the API, worker, and web run on the host
 with hot reload.
 
 ```bash
-docker compose up -d          # Postgres + Redis
+docker compose -f docker-compose.dev.yml up -d
 npm install
 npm run db:deploy             # apply migrations to the dev database
 npm run db:seed               # load demo data (optional but recommended)

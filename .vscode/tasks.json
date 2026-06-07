@@ -4,7 +4,7 @@
     {
       "label": "infra:up",
       "type": "shell",
-      "command": "docker compose up -d postgres redis",
+      "command": "docker compose -f docker-compose.dev.yml up -d postgres redis",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -12,6 +12,24 @@
     },
     {
       "label": "infra:down",
+      "type": "shell",
+      "command": "docker compose -f docker-compose.dev.yml down",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "full-stack:up",
+      "type": "shell",
+      "command": "docker compose up --build -d",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "full-stack:down",
       "type": "shell",
       "command": "docker compose down",
       "options": {

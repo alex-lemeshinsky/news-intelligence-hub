@@ -1,0 +1,49 @@
+# Development / debug flow: runs ONLY the backing services (Postgres + Redis).
+# The API, worker, and web run on the host with hot reload:
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   cp .env.example .env            # the localhost URLs in .env target these
+#   npm install
+#   npm run dev:api                 # http://localhost:3001
+#   npm run dev:web                 # http://localhost:3000
+#   npm run dev:worker
+#
+# For a fully containerized one-command startup, use docker-compose.yml.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nih-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-news_intelligence_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-nih}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nih_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nih} -d ${POSTGRES_DB:-news_intelligence_hub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nih-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
