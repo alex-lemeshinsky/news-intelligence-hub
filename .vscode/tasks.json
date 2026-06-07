@@ -84,9 +84,38 @@
       "problemMatcher": []
     },
     {
+      "label": "lint:ci",
+      "type": "shell",
+      "command": "npm run lint:ci",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "npm run test",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
       "label": "test:api",
       "type": "shell",
       "command": "npm run test:api",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "test:worker",
+      "type": "shell",
+      "command": "npm run test:worker",
       "options": {
         "cwd": "${workspaceFolder}"
       },

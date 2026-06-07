@@ -1,6 +1,7 @@
 import { Job } from 'bullmq';
 import {
   ArticleProcessingJobData,
+  DigestJobData,
   FeedPullJobData,
   JOB_NAMES,
   QUEUE_NAMES,
@@ -12,10 +13,12 @@ import {
   processArticleJob,
   processRegenerationJob,
 } from './article-processing.processor.js';
+import { DigestDependencies, processDigestJob } from './digest.processor.js';
 import { FeedPullDependencies, pullFeedJob } from './feed-pull.processor.js';
 
 export interface WorkerDependencies {
   articleProcessing: ArticleProcessingDependencies;
+  digest: DigestDependencies;
   feedPull: FeedPullDependencies;
 }
 
@@ -61,6 +64,11 @@ export async function handleQueueJob(
       dependencies.articleProcessing,
       job.data as RegenerationJobData,
     );
+    return;
+  }
+
+  if (queueName === QUEUE_NAMES.digest && job.name === JOB_NAMES.buildDigest) {
+    await processDigestJob(dependencies.digest, job.data as DigestJobData);
     return;
   }
 

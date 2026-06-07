@@ -32,6 +32,11 @@ export interface RegenerationJobData {
   userId: string;
 }
 
+export interface DigestJobData {
+  digestId: string;
+  userId: string;
+}
+
 export const ENTITY_TYPES = [
   'person',
   'company',

@@ -8,6 +8,7 @@ import {
 } from '@nih/shared';
 import { disconnectPrismaClient, getPrismaClient } from '@nih/database';
 import type { ArticleProcessingDatabase } from './article-processing.processor.js';
+import type { DigestDatabase } from './digest.processor.js';
 import type { FeedPullDatabase } from './feed-pull.processor.js';
 import { createConfiguredLlmClient } from './llm-client.js';
 import { handleQueueJob } from './processors.js';
@@ -37,6 +38,10 @@ function getQueue(name: QueueName): Queue {
 const dependencies = {
   articleProcessing: {
     database: prismaClient as unknown as ArticleProcessingDatabase,
+    llm: createConfiguredLlmClient(),
+  },
+  digest: {
+    database: prismaClient as unknown as DigestDatabase,
     llm: createConfiguredLlmClient(),
   },
   feedPull: {

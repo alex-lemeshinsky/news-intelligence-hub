@@ -1,9 +1,13 @@
 import { Module } from '@nestjs/common';
-import { DigestsService } from './digests.service';
+import { AuthModule } from '../auth/auth.module';
 import { DatabaseModule } from '../database/database.module';
+import { QueuesModule } from '../queues/queues.module';
+import { DigestsController } from './digests.controller';
+import { DigestsService } from './digests.service';
 
 @Module({
-  imports: [DatabaseModule],
+  controllers: [DigestsController],
+  imports: [AuthModule, DatabaseModule, QueuesModule],
   providers: [DigestsService],
   exports: [DigestsService],
 })

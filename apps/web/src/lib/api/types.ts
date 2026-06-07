@@ -103,6 +103,50 @@ export interface LlmTelemetryOverview {
   totals: LlmTelemetryTotals;
 }
 
+export type DigestPeriod = "day" | "week" | "month";
+
+export type DigestStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+
+export interface DigestFacts {
+  keyArticles: Array<{
+    articleId: string;
+    articleLabelId: string;
+    categories: string[];
+    importance: ArticleImportance | null;
+    publishedAt: string | null;
+    summary: string | null;
+    title: string;
+  }>;
+  topCategories: Array<{
+    categoryId: string;
+    count: number;
+    name: string;
+  }>;
+  topEntities: Array<{
+    count: number;
+    entityId: string;
+    name: string;
+    type: string;
+  }>;
+}
+
+export interface Digest {
+  completedAt: string | null;
+  createdAt: string;
+  error: string | null;
+  facts: DigestFacts | null;
+  id: string;
+  overview: string | null;
+  period: DigestPeriod;
+  periodEnd: string;
+  periodStart: string;
+  scope: {
+    categoryIds: string[];
+    entityIds: string[];
+  };
+  status: DigestStatus;
+}
+
 export type ArticleProcessingStatus =
   | "PENDING"
   | "FILTERED"

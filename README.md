@@ -83,6 +83,8 @@ user gets:
   demonstrate the similar counter.
 - Fifteen entities (companies, people, products, technologies, locations) with
   aliases, plus `mentions`, `co_mention`, and `similar` graph edges.
+- One completed weekly digest built from the seeded article/entity graph, so the
+  Digests page has a reviewable result before any live LLM credentials are used.
 - Seeded LLM telemetry rows for article analysis, regeneration, and digest
   operations, so the settings dashboard shows nonzero calls and token totals.
 
@@ -148,12 +150,16 @@ owns everything that can be expressed as a rule:
   weight is counted directly from shared article mentions
   (`article-processing.processor.ts`).
 
-The LLM is used only for the semantic step, in a single `analyzeArticle` call
-that returns the summary, extracted entities, importance, suggested categories,
-and axis labels together. Even there, the model only *proposes*: deterministic
-matchers (`matchCategoryIds`, `matchAxisAssignments`) keep only the categories
-and axis values that exist in the user's own configuration and silently drop
-hallucinated ones, so invalid labels never reach the database.
+The LLM is used only for semantic output: article analysis and the final prose
+paragraph of a period digest. Article processing uses a single `analyzeArticle`
+call that returns the summary, extracted entities, importance, suggested
+categories, and axis labels together. Digest jobs first select top entities, top
+categories, and key articles in deterministic code, then send only that compact
+fact set to the LLM for the overview text. Even in article analysis, the model
+only *proposes*: deterministic matchers (`matchCategoryIds`,
+`matchAxisAssignments`) keep only the categories and axis values that exist in
+the user's own configuration and silently drop hallucinated ones, so invalid
+labels never reach the database.
 
 Alternatives:
 
@@ -275,7 +281,10 @@ Decision: Cost is controlled in layered defenses, cheapest first.
    `LLM_REQUEST_TIMEOUT_MS`, and the number of simultaneous in-flight model calls
    is capped by `LLM_CONCURRENCY` on the article-processing worker (separate from
    `WORKER_CONCURRENCY` for the cheap deterministic queues).
-6. Successful provider calls record a `LlmTelemetry` row - provider, model,
+6. Period digest jobs use deterministic aggregation for top entities,
+   categories, and key articles, then spend at most one `DIGEST` call for the
+   final overview. Empty digest result sets complete without an LLM call.
+7. Successful provider calls record a `LlmTelemetry` row - provider, model,
    operation type, prompt/completion/total tokens, latency, and success. If a
    provider returns a response that is later rejected during validation, the
    worker also records failure telemetry. Failures that happen before a provider
@@ -564,9 +573,9 @@ already well understood.
 
 ### ADR-8: Queue monitoring - Bull Board
 
-Context: Feed pulling, article processing, and regeneration run as BullMQ jobs;
-the stack also defines a digest queue for the planned digest workflow. The
-acceptance walkthrough requires inspecting queue state -
+Context: Feed pulling, article processing, regeneration, and period digest
+building run as BullMQ jobs. The acceptance walkthrough requires inspecting
+queue state -
 waiting, active, completed, and failed jobs, with their payloads and retry
 history. That monitoring surface should be a ready-made tool rather than a
 hand-built panel, it must be protected by basic-auth credentials from env, and

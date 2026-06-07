@@ -36,6 +36,12 @@ export default async function WorkspaceLayout({
               </Link>
               <Link
                 className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
+                href="/workspace/digests"
+              >
+                Digests
+              </Link>
+              <Link
+                className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
                 href="/workspace/settings"
               >
                 Settings

@@ -3,6 +3,7 @@ import argon2 from 'argon2';
 import {
   ArticleImportance,
   ArticleProcessingStatus,
+  DigestStatus,
   EntityType,
   FeedStatus,
   GraphEdgeKind,
@@ -31,9 +32,9 @@ import {
 //
 // Scope is intentionally limited to data the UI actually renders: feeds with
 // status, processed/filtered/pending article labels, category and axis
-// assignments, entities with aliases, mentions, similarity, graph edges, and
-// aggregate LLM telemetry for the settings dashboard. Digest rows are not
-// seeded yet because no read path surfaces them.
+// assignments, entities with aliases, mentions, similarity, graph edges, one
+// completed period digest, and aggregate LLM telemetry for the settings
+// dashboard.
 
 const prisma = new PrismaClient();
 
@@ -437,6 +438,7 @@ async function main(): Promise<void> {
   }
 
   const articleIdByKey = new Map<string, string>();
+  const labelIdByArticleKey = new Map<string, string>();
   // Accumulators for graph edges, built only from processed articles.
   const coMention = new Map<string, { weight: number; categoryId: string | null; ts: number }>();
 
@@ -497,6 +499,7 @@ async function main(): Promise<void> {
         processedAt,
       },
     });
+    labelIdByArticleKey.set(article.key, label.id);
 
     const assignedCategoryIds: string[] = [];
     for (const categoryName of article.categories) {
@@ -610,6 +613,24 @@ async function main(): Promise<void> {
 
   const telemetryRows = buildDemoTelemetryRows(user.id, now);
   await prisma.llmTelemetry.createMany({ data: telemetryRows });
+  await prisma.digest.create({
+    data: {
+      userId: user.id,
+      status: DigestStatus.COMPLETED,
+      periodStart: publishedAtForDaysAgo(7, now),
+      periodEnd: now,
+      completedAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
+      overview:
+        'AI infrastructure dominated the week, led by OpenAI, Microsoft, and Nvidia activity around model launches, cloud capacity, and enterprise adoption.',
+      scopeJson: buildDemoDigestScopeJson({
+        articleIdByKey,
+        categoryIdByName,
+        entityIdByKey,
+        labelIdByArticleKey,
+        now,
+      }),
+    },
+  });
 
   const processedCount = ARTICLES.filter(
     (article) => article.status === ArticleProcessingStatus.PROCESSED,
@@ -624,9 +645,72 @@ async function main(): Promise<void> {
       articles: ARTICLES.length,
       processedArticles: processedCount,
       coMentionEdges: coMention.size,
+      digests: 1,
       telemetryRows: telemetryRows.length,
     }),
   );
+}
+
+function buildDemoDigestScopeJson(input: {
+  articleIdByKey: Map<string, string>;
+  categoryIdByName: Map<string, string>;
+  entityIdByKey: Map<string, string>;
+  labelIdByArticleKey: Map<string, string>;
+  now: Date;
+}) {
+  const digestArticles = ARTICLES.filter(
+    (article) => article.status === ArticleProcessingStatus.PROCESSED,
+  ).slice(0, 5);
+  const categoryCounts = countNamedItems(
+    digestArticles.flatMap((article) => article.categories),
+  );
+  const entityCounts = countNamedItems(
+    digestArticles.flatMap((article) =>
+      article.mentions.map((entityKey) => ENTITIES.find((entity) => entity.key === entityKey)!.name),
+    ),
+  );
+
+  return {
+    period: 'week',
+    categoryIds: [],
+    entityIds: [],
+    facts: {
+      topCategories: categoryCounts.slice(0, 6).map((category) => ({
+        categoryId: input.categoryIdByName.get(category.name)!,
+        name: category.name,
+        count: category.count,
+      })),
+      topEntities: entityCounts.slice(0, 8).map((entity) => {
+        const seed = ENTITIES.find((candidate) => candidate.name === entity.name)!;
+        return {
+          entityId: input.entityIdByKey.get(seed.key)!,
+          name: entity.name,
+          type: seed.type,
+          count: entity.count,
+        };
+      }),
+      keyArticles: digestArticles.map((article) => ({
+        articleId: input.articleIdByKey.get(article.key)!,
+        articleLabelId: input.labelIdByArticleKey.get(article.key)!,
+        title: article.title,
+        summary: article.summary ?? null,
+        importance: article.importance ?? null,
+        categories: article.categories,
+        publishedAt: publishedAtForDaysAgo(article.daysAgo, input.now).toISOString(),
+      })),
+    },
+  };
+}
+
+function countNamedItems(names: string[]): Array<{ count: number; name: string }> {
+  const counts = new Map<string, number>();
+  for (const name of names) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .map(([name, count]) => ({ count, name }))
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
 }
 
 function buildDemoTelemetryRows(userId: string, now: Date) {

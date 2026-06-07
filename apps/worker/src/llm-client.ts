@@ -50,6 +50,44 @@ export interface LlmArticleAnalysisResponse {
   usage: LlmUsage;
 }
 
+export interface DigestBuildInput {
+  keyArticles: Array<{
+    categories: string[];
+    importance: string | null;
+    publishedAt: string | null;
+    summary: string | null;
+    title: string;
+  }>;
+  periodEnd: string;
+  periodStart: string;
+  scope: {
+    categoryIds: string[];
+    entityIds: string[];
+    period: string;
+  };
+  topCategories: Array<{
+    count: number;
+    name: string;
+  }>;
+  topEntities: Array<{
+    count: number;
+    name: string;
+    type: string;
+  }>;
+}
+
+export interface DigestOverview {
+  overview: string;
+}
+
+export interface LlmDigestBuildResponse {
+  latencyMs: number;
+  model: string;
+  provider: LlmProvider;
+  result: unknown;
+  usage: LlmUsage;
+}
+
 export interface LlmArticleAnalyzer {
   analyzeArticle(
     input: ArticleAnalysisInput,
@@ -58,8 +96,21 @@ export interface LlmArticleAnalyzer {
   provider?: LlmProvider;
 }
 
-interface ProviderRequest {
+export interface LlmDigestBuilder {
+  buildDigest(input: DigestBuildInput): Promise<LlmDigestBuildResponse>;
+  model?: string;
+  provider?: LlmProvider;
+}
+
+interface ArticleProviderRequest {
   input: ArticleAnalysisInput;
+  maxOutputTokens: number;
+  model: string;
+  timeoutMs: number;
+}
+
+interface DigestProviderRequest {
+  input: DigestBuildInput;
   maxOutputTokens: number;
   model: string;
   timeoutMs: number;
@@ -114,7 +165,17 @@ const articleAnalysisSchema = {
   type: 'object',
 } as const;
 
-export function createConfiguredLlmClient(): LlmArticleAnalyzer {
+const digestSchema = {
+  additionalProperties: false,
+  properties: {
+    overview: { type: 'string' },
+  },
+  required: ['overview'],
+  type: 'object',
+} as const;
+
+export function createConfiguredLlmClient(): LlmArticleAnalyzer &
+  LlmDigestBuilder {
   const provider = normalizeProvider(process.env.LLM_PROVIDER ?? 'openai');
   const model = process.env.LLM_MODEL ?? defaultModelForProvider(provider);
   const timeoutMs = parseIntegerEnv('LLM_REQUEST_TIMEOUT_MS', 30000);
@@ -139,6 +200,20 @@ export function createConfiguredLlmClient(): LlmArticleAnalyzer {
 
       return callAnthropic(request);
     },
+    async buildDigest(input: DigestBuildInput): Promise<LlmDigestBuildResponse> {
+      const request = {
+        input,
+        maxOutputTokens,
+        model,
+        timeoutMs,
+      };
+
+      if (provider === LlmProvider.OPENAI) {
+        return callOpenAiDigest(request);
+      }
+
+      return callAnthropicDigest(request);
+    },
   };
 }
 
@@ -161,8 +236,15 @@ export function validateArticleAnalysis(value: unknown): ArticleAnalysis {
   };
 }
 
+export function validateDigestOverview(value: unknown): DigestOverview {
+  const record = asRecord(value, 'digest overview');
+  const overview = readNonEmptyDigestString(record.overview, 'overview');
+
+  return { overview };
+}
+
 async function callOpenAi(
-  request: ProviderRequest,
+  request: ArticleProviderRequest,
 ): Promise<LlmArticleAnalysisResponse> {
   const apiKey = requireEnv('OPENAI_API_KEY');
   const startedAt = Date.now();
@@ -205,7 +287,7 @@ async function callOpenAi(
 }
 
 async function callAnthropic(
-  request: ProviderRequest,
+  request: ArticleProviderRequest,
 ): Promise<LlmArticleAnalysisResponse> {
   const apiKey = requireEnv('ANTHROPIC_API_KEY');
   const startedAt = Date.now();
@@ -246,12 +328,106 @@ async function callAnthropic(
   };
 }
 
+async function callOpenAiDigest(
+  request: DigestProviderRequest,
+): Promise<LlmDigestBuildResponse> {
+  const apiKey = requireEnv('OPENAI_API_KEY');
+  const startedAt = Date.now();
+  const response = await fetchWithTimeout(
+    'https://api.openai.com/v1/responses',
+    {
+      body: JSON.stringify({
+        input: buildDigestPrompt(request.input),
+        instructions: buildDigestInstructions(),
+        max_output_tokens: request.maxOutputTokens,
+        model: request.model,
+        text: {
+          format: {
+            name: 'period_digest',
+            schema: digestSchema,
+            strict: true,
+            type: 'json_schema',
+          },
+        },
+      }),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      method: 'POST',
+    },
+    request.timeoutMs,
+  );
+  const body = await readProviderResponse(response);
+  const usage = readOpenAiUsage(body);
+  const text = readOpenAiOutputText(body);
+
+  return {
+    latencyMs: Date.now() - startedAt,
+    model: request.model,
+    provider: LlmProvider.OPENAI,
+    result: parseJsonObject(text),
+    usage,
+  };
+}
+
+async function callAnthropicDigest(
+  request: DigestProviderRequest,
+): Promise<LlmDigestBuildResponse> {
+  const apiKey = requireEnv('ANTHROPIC_API_KEY');
+  const startedAt = Date.now();
+  const response = await fetchWithTimeout(
+    'https://api.anthropic.com/v1/messages',
+    {
+      body: JSON.stringify({
+        max_tokens: request.maxOutputTokens,
+        messages: [
+          {
+            content: buildDigestPrompt(request.input),
+            role: 'user',
+          },
+        ],
+        model: request.model,
+        system: buildDigestInstructions(),
+        temperature: 0,
+      }),
+      headers: {
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      method: 'POST',
+    },
+    request.timeoutMs,
+  );
+  const body = await readProviderResponse(response);
+  const usage = readAnthropicUsage(body);
+  const text = readAnthropicOutputText(body);
+
+  return {
+    latencyMs: Date.now() - startedAt,
+    model: request.model,
+    provider: LlmProvider.ANTHROPIC,
+    result: parseJsonObject(text),
+    usage,
+  };
+}
+
 function buildArticleAnalysisInstructions(): string {
   return [
     'Analyze one technical or industry news article.',
     'Return only JSON matching the provided schema.',
     'Use deterministic category and axis names exactly as supplied.',
     'Do not invent categories or axis values.',
+  ].join(' ');
+}
+
+function buildDigestInstructions(): string {
+  return [
+    'Write a concise news intelligence digest overview.',
+    'Use only the supplied deterministic facts.',
+    'Return only JSON matching the provided schema.',
+    'Do not invent articles, entities, categories, or metrics.',
   ].join(' ');
 }
 
@@ -265,6 +441,14 @@ function buildArticleAnalysisPrompt(input: ArticleAnalysisInput): string {
     availableCategories: input.categories,
     task:
       'Summarize the article, classify importance, extract named entities, assign matching categories, and assign matching axis values.',
+  });
+}
+
+function buildDigestPrompt(input: DigestBuildInput): string {
+  return JSON.stringify({
+    digest: input,
+    task:
+      'Summarize the period in one compact paragraph, emphasizing notable entities, categories, and key articles.',
   });
 }
 
@@ -567,6 +751,14 @@ function readArray(value: unknown, label: string): unknown[] {
 function readNonEmptyString(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`Invalid article analysis: ${label} is required.`);
+  }
+
+  return value.trim();
+}
+
+function readNonEmptyDigestString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Invalid digest: ${label} is required.`);
   }
 
   return value.trim();
