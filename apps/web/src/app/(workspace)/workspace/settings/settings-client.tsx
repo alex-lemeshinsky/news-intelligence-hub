@@ -549,7 +549,7 @@ function ProgressMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-2">
       <p className="text-base font-semibold leading-none text-slate-950">
-        {value}
+        {formatNumber(value)}
       </p>
       <p className="mt-1 text-xs font-medium text-slate-500">{label}</p>
     </div>
@@ -778,6 +778,10 @@ function runStatusClass(status: RegenerationRun["status"]): string {
 }
 
 function labelFromEnum(value: string): string {
+  if (value === "OPENAI") {
+    return "OpenAI";
+  }
+
   return value
     .toLowerCase()
     .split("_")
