@@ -42,7 +42,22 @@ export interface LlmUsage {
   totalTokens: number;
 }
 
+export interface LlmProviderModel {
+  model: string;
+  provider: LlmProvider;
+}
+
+export interface LlmAttemptTelemetry {
+  errorCode?: string;
+  latencyMs: number;
+  model: string;
+  provider: LlmProvider;
+  success: boolean;
+  usage: LlmUsage;
+}
+
 export interface LlmArticleAnalysisResponse {
+  attempts?: LlmAttemptTelemetry[];
   latencyMs: number;
   model: string;
   provider: LlmProvider;
@@ -81,6 +96,7 @@ export interface DigestOverview {
 }
 
 export interface LlmDigestBuildResponse {
+  attempts?: LlmAttemptTelemetry[];
   latencyMs: number;
   model: string;
   provider: LlmProvider;
@@ -94,25 +110,25 @@ export interface LlmArticleAnalyzer {
   ): Promise<LlmArticleAnalysisResponse>;
   model?: string;
   provider?: LlmProvider;
+  providerModels?: LlmProviderModel[];
 }
 
 export interface LlmDigestBuilder {
   buildDigest(input: DigestBuildInput): Promise<LlmDigestBuildResponse>;
   model?: string;
   provider?: LlmProvider;
+  providerModels?: LlmProviderModel[];
 }
 
-interface ArticleProviderRequest {
+interface ArticleProviderRequest extends LlmProviderModel {
   input: ArticleAnalysisInput;
   maxOutputTokens: number;
-  model: string;
   timeoutMs: number;
 }
 
-interface DigestProviderRequest {
+interface DigestProviderRequest extends LlmProviderModel {
   input: DigestBuildInput;
   maxOutputTokens: number;
-  model: string;
   timeoutMs: number;
 }
 
@@ -176,45 +192,149 @@ const digestSchema = {
 
 export function createConfiguredLlmClient(): LlmArticleAnalyzer &
   LlmDigestBuilder {
-  const provider = normalizeProvider(process.env.LLM_PROVIDER ?? 'openai');
-  const model = process.env.LLM_MODEL ?? defaultModelForProvider(provider);
+  const providerModels = configuredProviderModels();
+  const primary = providerModels[0];
   const timeoutMs = parseIntegerEnv('LLM_REQUEST_TIMEOUT_MS', 30000);
   const maxOutputTokens = parseIntegerEnv('LLM_MAX_OUTPUT_TOKENS', 2000);
 
   return {
-    model,
-    provider,
+    model: primary.model,
+    provider: primary.provider,
+    providerModels,
     async analyzeArticle(
       input: ArticleAnalysisInput,
     ): Promise<LlmArticleAnalysisResponse> {
-      const request = {
-        input,
-        maxOutputTokens,
-        model,
-        timeoutMs,
-      };
-
-      if (provider === LlmProvider.OPENAI) {
-        return callOpenAi(request);
-      }
-
-      return callAnthropic(request);
+      return callWithFailover(providerModels, (providerModel) =>
+        callArticleProvider({
+          ...providerModel,
+          input,
+          maxOutputTokens,
+          timeoutMs,
+        }),
+      );
     },
     async buildDigest(input: DigestBuildInput): Promise<LlmDigestBuildResponse> {
-      const request = {
-        input,
-        maxOutputTokens,
-        model,
-        timeoutMs,
-      };
-
-      if (provider === LlmProvider.OPENAI) {
-        return callOpenAiDigest(request);
-      }
-
-      return callAnthropicDigest(request);
+      return callWithFailover(providerModels, (providerModel) =>
+        callDigestProvider({
+          ...providerModel,
+          input,
+          maxOutputTokens,
+          timeoutMs,
+        }),
+      );
     },
   };
+}
+
+function configuredProviderModels(): LlmProviderModel[] {
+  const provider = normalizeProvider(process.env.LLM_PROVIDER ?? 'openai');
+  const model =
+    process.env.LLM_MODEL?.trim() || defaultModelForProvider(provider);
+  const fallbackProviderValue = process.env.LLM_FALLBACK_PROVIDER?.trim();
+  if (!fallbackProviderValue) {
+    return [{ model, provider }];
+  }
+
+  const fallbackProvider = normalizeProvider(fallbackProviderValue);
+  if (fallbackProvider === provider) {
+    throw new Error('LLM_FALLBACK_PROVIDER must differ from LLM_PROVIDER.');
+  }
+
+  const fallbackModel =
+    process.env.LLM_FALLBACK_MODEL?.trim() ||
+    defaultModelForProvider(fallbackProvider);
+  return [
+    { model, provider },
+    { model: fallbackModel, provider: fallbackProvider },
+  ];
+}
+
+async function callArticleProvider(
+  request: ArticleProviderRequest,
+): Promise<LlmArticleAnalysisResponse> {
+  return request.provider === LlmProvider.OPENAI
+    ? callOpenAi(request)
+    : callAnthropic(request);
+}
+
+async function callDigestProvider(
+  request: DigestProviderRequest,
+): Promise<LlmDigestBuildResponse> {
+  return request.provider === LlmProvider.OPENAI
+    ? callOpenAiDigest(request)
+    : callAnthropicDigest(request);
+}
+
+async function callWithFailover<
+  T extends {
+    latencyMs: number;
+    model: string;
+    provider: LlmProvider;
+    result: unknown;
+    usage: LlmUsage;
+  },
+>(
+  providerModels: LlmProviderModel[],
+  callProvider: (providerModel: LlmProviderModel) => Promise<T>,
+): Promise<T & { attempts: LlmAttemptTelemetry[] }> {
+  const attempts: LlmAttemptTelemetry[] = [];
+  let lastError: unknown = null;
+
+  for (const providerModel of providerModels) {
+    const startedAt = Date.now();
+    try {
+      const response = await callProvider(providerModel);
+      attempts.push({
+        latencyMs: response.latencyMs,
+        model: response.model,
+        provider: response.provider,
+        success: true,
+        usage: response.usage,
+      });
+
+      return {
+        ...response,
+        attempts,
+      };
+    } catch (error) {
+      lastError = error;
+      attempts.push({
+        errorCode: getErrorMessage(error),
+        latencyMs: Date.now() - startedAt,
+        model: providerModel.model,
+        provider: providerModel.provider,
+        success: false,
+        usage: zeroUsage(),
+      });
+    }
+  }
+
+  throw new LlmProviderAttemptsError(attempts, lastError);
+}
+
+export function getLlmAttempts(error: unknown): LlmAttemptTelemetry[] {
+  if (error instanceof LlmProviderAttemptsError) {
+    return error.attempts;
+  }
+
+  const record = asOptionalRecord(error);
+  return Array.isArray(record?.attempts)
+    ? record.attempts.filter(isLlmAttemptTelemetry)
+    : [];
+}
+
+class LlmProviderAttemptsError extends Error {
+  constructor(
+    readonly attempts: LlmAttemptTelemetry[],
+    readonly cause: unknown,
+  ) {
+    super(
+      `All configured LLM provider attempts failed: ${attempts
+        .map((attempt) => `${attempt.provider}/${attempt.model}`)
+        .join(', ')}`,
+    );
+    this.name = 'LlmProviderAttemptsError';
+  }
 }
 
 export function validateArticleAnalysis(value: unknown): ArticleAnalysis {
@@ -716,6 +836,39 @@ function requireEnv(name: string): string {
   }
 
   return value;
+}
+
+function zeroUsage(): LlmUsage {
+  return {
+    completionTokens: 0,
+    promptTokens: 0,
+    totalTokens: 0,
+  };
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'LLM provider attempt failed.';
+}
+
+function isLlmAttemptTelemetry(value: unknown): value is LlmAttemptTelemetry {
+  const record = asOptionalRecord(value);
+  const usage = asOptionalRecord(record?.usage);
+  return (
+    Boolean(record) &&
+    typeof record?.model === 'string' &&
+    isProviderValue(record.provider) &&
+    typeof record.latencyMs === 'number' &&
+    Number.isFinite(record.latencyMs) &&
+    typeof record.success === 'boolean' &&
+    typeof usage?.completionTokens === 'number' &&
+    typeof usage.promptTokens === 'number' &&
+    typeof usage.totalTokens === 'number' &&
+    (record.errorCode === undefined || typeof record.errorCode === 'string')
+  );
+}
+
+function isProviderValue(value: unknown): value is LlmProvider {
+  return value === LlmProvider.OPENAI || value === LlmProvider.ANTHROPIC;
 }
 
 function readErrorMessage(value: unknown): string | undefined {

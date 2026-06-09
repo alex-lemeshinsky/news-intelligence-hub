@@ -11,6 +11,7 @@ import type { ArticleProcessingDatabase } from './article-processing.processor.j
 import type { DigestDatabase } from './digest.processor.js';
 import type { FeedPullDatabase } from './feed-pull.processor.js';
 import { createConfiguredLlmClient } from './llm-client.js';
+import { structuredLog } from './logger.js';
 import { handleQueueJob } from './processors.js';
 
 if (!process.env.DATABASE_URL?.trim()) {
@@ -118,10 +119,7 @@ process.on('SIGTERM', () => {
   void shutdown().then(() => process.exit(0));
 });
 
-console.log(
-  JSON.stringify({
-    event: 'worker.started',
-    queues: Object.values(QUEUE_NAMES),
-    redisUrl,
-  }),
-);
+structuredLog('worker.started', {
+  queues: Object.values(QUEUE_NAMES),
+  redisUrl,
+});

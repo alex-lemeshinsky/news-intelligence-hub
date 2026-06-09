@@ -286,12 +286,12 @@ Decision: Cost is controlled in layered defenses, cheapest first.
    final overview. Empty digest result sets complete without an LLM call.
 7. Successful provider calls record a `LlmTelemetry` row - provider, model,
    operation type, prompt/completion/total tokens, latency, and success. If a
-   provider returns a response that is later rejected during validation, the
-   worker also records failure telemetry. Failures that happen before a provider
-   response is available, such as missing credentials, request timeouts, or
-   non-JSON HTTP errors, currently fail the job without a telemetry row. Cache
-   hits cost nothing and are deliberately not recorded, so telemetry reflects
-   actual measured provider usage.
+   primary provider attempt fails before usable output is available, the worker
+   records a failed telemetry row with zero tokens and tries the configured
+   fallback provider. If a provider returns output that is later rejected during
+   validation, that attempt is also recorded as failed. Cache hits cost nothing
+   and are deliberately not recorded, so telemetry reflects actual measured
+   provider usage.
 
 Alternatives:
 
@@ -342,22 +342,21 @@ backbone.
   throws, so invalid or hallucinated output is treated as a failure instead of
   being persisted.
 - Article-processing failures (provider error, timeout, or failed validation)
-  mark the `ArticleLabel` as `FAILED`, write a failure `LlmTelemetry` row when a
-  provider response object is available for the failed attempt, and rethrow.
-  BullMQ then retries with exponential backoff (`QUEUE_JOB_ATTEMPTS`, default 3;
-  `QUEUE_JOB_BACKOFF_MS`, default 5000). When attempts are exhausted the job is
-  retained (`removeOnFail`) and the article stays `FAILED`, i.e. awaiting later
-  reprocessing, rather than being lost.
-- Provider choice is a single active provider selected by `LLM_PROVIDER` /
+  mark the `ArticleLabel` as `FAILED`, write failure telemetry for every provider
+  attempt, and rethrow. BullMQ then retries with exponential backoff
+  (`QUEUE_JOB_ATTEMPTS`, default 3; `QUEUE_JOB_BACKOFF_MS`, default 5000). When
+  attempts are exhausted the job is retained (`removeOnFail`) and the article
+  stays `FAILED`, i.e. awaiting later reprocessing, rather than being lost.
+- Provider choice starts with the active provider selected by `LLM_PROVIDER` /
   `LLM_MODEL`, with both OpenAI and Anthropic adapters behind one interface
-  (`createConfiguredLlmClient`). An operator can switch providers by changing env
-  and redeploying.
-
-Automatic cross-provider failover (retrying a failed call on the second provider
-within the same job) is intentionally **not** implemented yet. It is a
-Should-level enhancement; the env-switchable adapter interface is the seam where
-it would attach, and retry-with-backoff already absorbs the common case of
-transient provider errors. This is listed as a known limitation below.
+  (`createConfiguredLlmClient`). When `LLM_FALLBACK_PROVIDER` is set and differs
+  from the primary provider, provider request failures automatically retry the
+  same operation on `LLM_FALLBACK_MODEL` or that provider's default model.
+- Failover is intentionally limited to provider/request failures such as missing
+  credentials, timeouts, non-2xx responses, missing output text, or non-JSON
+  provider output. If the model returns JSON that fails domain validation, the
+  worker does not ask another provider to reinterpret the article; it records the
+  failed attempt and lets the normal queue retry path handle it.
 
 Alternatives:
 
@@ -372,19 +371,17 @@ Alternatives:
   Rejected because one broken feed URL or one malformed response would halt
   processing for every feed and user, the opposite of the required graceful
   degradation.
-- Build automatic provider failover now, before the Must scope is solid.
-  Deferred rather than rejected on merit: the abstraction already isolates
-  provider choice and backoff handles transient errors, so failover is scoped as
-  a later Should improvement instead of competing with core correctness work.
+- Always call both providers and compare outputs. Rejected because it doubles
+  spend, complicates conflict resolution, and would use LLMs for quality voting
+  instead of the cheaper validation boundary the MVP already has.
 
 Trade-offs: The chosen approach guarantees that only well-formed data is stored,
 recovers transient feed and provider errors automatically, and makes every
-failure durable and visible - feed status, `FAILED` labels, and failure
-telemetry - instead of silent. The costs are that a sustained outage of the one
-configured provider stalls article processing until it recovers or an operator
-switches `LLM_PROVIDER` (no automatic failover yet), and that retained failed
-jobs consume Redis space and may need manual reprocessing once a root cause is
-fixed.
+failure durable and visible - feed status, `FAILED` labels, failed attempt
+telemetry, and fallback successes - instead of silent. The costs are that
+failover can spend on a second provider for the same item, fallback behavior
+requires both provider credentials to be configured, and retained failed jobs
+still consume Redis space when both providers fail.
 
 ### ADR-5: Backend choice - NestJS
 

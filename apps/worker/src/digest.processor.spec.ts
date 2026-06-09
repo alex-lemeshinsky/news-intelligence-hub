@@ -53,6 +53,70 @@ describe('processDigestJob', () => {
     assert.ok(calls.includes('llmTelemetry.create:DIGEST:true:100'));
   });
 
+  it('records failed primary telemetry and completes the digest when fallback succeeds', async () => {
+    const calls: string[] = [];
+    const database = createDigestDatabaseDouble(calls);
+
+    await processDigestJob(
+      {
+        database,
+        llm: {
+          async buildDigest() {
+            return {
+              attempts: [
+                {
+                  errorCode: 'primary unavailable',
+                  latencyMs: 9,
+                  model: 'primary-model',
+                  provider: 'OPENAI',
+                  success: false,
+                  usage: {
+                    completionTokens: 0,
+                    promptTokens: 0,
+                    totalTokens: 0,
+                  },
+                },
+                {
+                  latencyMs: 33,
+                  model: 'fallback-model',
+                  provider: 'ANTHROPIC',
+                  success: true,
+                  usage: {
+                    completionTokens: 11,
+                    promptTokens: 44,
+                    totalTokens: 55,
+                  },
+                },
+              ],
+              latencyMs: 33,
+              model: 'fallback-model',
+              provider: 'ANTHROPIC',
+              result: {
+                overview:
+                  'Fallback digest overview focused on AI infrastructure.',
+              },
+              usage: {
+                completionTokens: 11,
+                promptTokens: 44,
+                totalTokens: 55,
+              },
+            };
+          },
+        },
+      },
+      {
+        digestId: 'digest_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.ok(calls.includes('digest.update:COMPLETED'));
+    assert.ok(calls.includes('llmTelemetry.create:DIGEST:OPENAI:false:0'));
+    assert.ok(
+      calls.includes('llmTelemetry.create:DIGEST:ANTHROPIC:true:55'),
+    );
+  });
+
   it('completes an empty digest without spending LLM tokens', async () => {
     const calls: string[] = [];
     const database = createDigestDatabaseDouble(calls, {
@@ -121,6 +185,62 @@ describe('processDigestJob', () => {
 
     assert.ok(calls.includes('digest.update:FAILED'));
     assert.ok(calls.includes('llmTelemetry.create:DIGEST:false:10'));
+  });
+
+  it('marks the digest failed and records every failed provider attempt when all providers fail', async () => {
+    const calls: string[] = [];
+    const database = createDigestDatabaseDouble(calls);
+
+    await assert.rejects(
+      processDigestJob(
+        {
+          database,
+          llm: {
+            async buildDigest() {
+              throw Object.assign(new Error('All providers failed'), {
+                attempts: [
+                  {
+                    errorCode: 'primary failed',
+                    latencyMs: 10,
+                    model: 'primary-model',
+                    provider: 'OPENAI',
+                    success: false,
+                    usage: {
+                      completionTokens: 0,
+                      promptTokens: 0,
+                      totalTokens: 0,
+                    },
+                  },
+                  {
+                    errorCode: 'fallback failed',
+                    latencyMs: 20,
+                    model: 'fallback-model',
+                    provider: 'ANTHROPIC',
+                    success: false,
+                    usage: {
+                      completionTokens: 0,
+                      promptTokens: 0,
+                      totalTokens: 0,
+                    },
+                  },
+                ],
+              });
+            },
+          },
+        },
+        {
+          digestId: 'digest_1',
+          userId: 'user_1',
+        },
+      ),
+      /All providers failed/,
+    );
+
+    assert.ok(calls.includes('digest.update:FAILED'));
+    assert.ok(calls.includes('llmTelemetry.create:DIGEST:OPENAI:false:0'));
+    assert.ok(
+      calls.includes('llmTelemetry.create:DIGEST:ANTHROPIC:false:0'),
+    );
   });
 });
 
@@ -269,11 +389,15 @@ function createDigestDatabaseDouble(
       async create(args: Record<string, unknown>) {
         const data = args.data as {
           operation: string;
+          provider?: string;
           success: boolean;
           totalTokens: number;
         };
         calls.push(
           `llmTelemetry.create:${data.operation}:${data.success}:${data.totalTokens}`,
+        );
+        calls.push(
+          `llmTelemetry.create:${data.operation}:${data.provider}:${data.success}:${data.totalTokens}`,
         );
         return {};
       },

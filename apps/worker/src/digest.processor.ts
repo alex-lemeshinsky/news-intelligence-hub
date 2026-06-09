@@ -1,10 +1,13 @@
 import { DigestJobData } from '@nih/shared';
 import {
   DigestBuildInput,
+  LlmAttemptTelemetry,
   LlmDigestBuilder,
   LlmDigestBuildResponse,
+  getLlmAttempts,
   validateDigestOverview,
 } from './llm-client.js';
+import { structuredLog } from './logger.js';
 import {
   ArticleImportance,
   ArticleProcessingStatus,
@@ -107,6 +110,11 @@ export async function processDigestJob(
   });
 
   if (!digest) {
+    structuredLog('digest.build.skipped', {
+      digestId: payload.digestId,
+      userId: payload.userId,
+      reason: 'digest_not_found',
+    });
     return;
   }
 
@@ -144,6 +152,13 @@ export async function processDigestJob(
       await completeDigest(dependencies.database, digest, scope, facts, {
         overview: EMPTY_DIGEST_OVERVIEW,
       });
+      structuredLog('digest.build.completed', {
+        digestId: digest.id,
+        userId: payload.userId,
+        empty: true,
+        keyArticleCount: 0,
+        llmCalled: false,
+      });
       return;
     }
 
@@ -152,14 +167,21 @@ export async function processDigestJob(
     const result = validateDigestOverview(llmResponse.result);
 
     await completeDigest(dependencies.database, digest, scope, facts, result);
-    await recordTelemetry(dependencies.database, {
-      latencyMs: llmResponse.latencyMs,
-      model: llmResponse.model,
-      operation: LlmOperation.DIGEST,
-      provider: llmResponse.provider,
-      success: true,
-      usage: llmResponse.usage,
+    await recordAttemptTelemetry(
+      dependencies.database,
+      attemptsForResponse(llmResponse, true),
+      payload.userId,
+      LlmOperation.DIGEST,
+    );
+
+    structuredLog('digest.build.completed', {
+      digestId: digest.id,
       userId: payload.userId,
+      empty: false,
+      keyArticleCount: facts.keyArticles.length,
+      topCategoryCount: facts.topCategories.length,
+      topEntityCount: facts.topEntities.length,
+      llmCalled: true,
     });
   } catch (error) {
     await dependencies.database.digest.update({
@@ -170,18 +192,24 @@ export async function processDigestJob(
       where: { id: digest.id },
     });
 
-    if (llmResponse) {
-      await recordTelemetry(dependencies.database, {
-        errorCode: getErrorMessage(error),
-        latencyMs: llmResponse.latencyMs,
-        model: llmResponse.model,
-        operation: LlmOperation.DIGEST,
-        provider: llmResponse.provider,
-        success: false,
-        usage: llmResponse.usage,
+    await recordAttemptTelemetry(
+      dependencies.database,
+      llmResponse
+        ? attemptsForResponse(llmResponse, false, getErrorMessage(error))
+        : getLlmAttempts(error),
+      payload.userId,
+      LlmOperation.DIGEST,
+    );
+
+    structuredLog(
+      'digest.build.failed',
+      {
+        digestId: digest.id,
         userId: payload.userId,
-      });
-    }
+        error: getErrorMessage(error),
+      },
+      'error',
+    );
 
     throw error;
   }
@@ -405,6 +433,59 @@ async function recordTelemetry(
       userId: input.userId,
     },
   });
+}
+
+async function recordAttemptTelemetry(
+  database: DigestDatabase,
+  attempts: LlmAttemptTelemetry[],
+  userId: string,
+  operation: LlmOperation,
+): Promise<void> {
+  for (const attempt of attempts) {
+    await recordTelemetry(database, {
+      errorCode: attempt.errorCode,
+      latencyMs: attempt.latencyMs,
+      model: attempt.model,
+      operation,
+      provider: attempt.provider,
+      success: attempt.success,
+      usage: attempt.usage,
+      userId,
+    });
+  }
+}
+
+function attemptsForResponse(
+  response: LlmDigestBuildResponse,
+  success: boolean,
+  errorCode?: string,
+): LlmAttemptTelemetry[] {
+  const attempts =
+    response.attempts && response.attempts.length > 0
+      ? response.attempts
+      : [
+          {
+            latencyMs: response.latencyMs,
+            model: response.model,
+            provider: response.provider,
+            success: true,
+            usage: response.usage,
+          },
+        ];
+
+  if (success) {
+    return attempts;
+  }
+
+  return attempts.map((attempt, index) =>
+    index === attempts.length - 1
+      ? {
+          ...attempt,
+          errorCode,
+          success: false,
+        }
+      : attempt,
+  );
 }
 
 function parseDigestScope(value: unknown): DigestScope {

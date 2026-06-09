@@ -15,6 +15,7 @@ import {
 } from './article-processing.processor.js';
 import { DigestDependencies, processDigestJob } from './digest.processor.js';
 import { FeedPullDependencies, pullFeedJob } from './feed-pull.processor.js';
+import { errorMessage, structuredLog } from './logger.js';
 
 export interface WorkerDependencies {
   articleProcessing: ArticleProcessingDependencies;
@@ -27,15 +28,39 @@ export async function handleQueueJob(
   job: Job,
   dependencies: WorkerDependencies,
 ): Promise<void> {
-  console.log(
-    JSON.stringify({
-      event: 'worker.job.received',
-      queue: queueName,
-      jobId: job.id,
-      jobName: job.name,
-    }),
-  );
+  const context = {
+    jobId: job.id,
+    jobName: job.name,
+    queue: queueName,
+  };
+  structuredLog('worker.job.received', context);
+  const startedAt = Date.now();
 
+  try {
+    await dispatchQueueJob(queueName, job, dependencies);
+    structuredLog('worker.job.completed', {
+      ...context,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    structuredLog(
+      'worker.job.failed',
+      {
+        ...context,
+        durationMs: Date.now() - startedAt,
+        error: errorMessage(error),
+      },
+      'error',
+    );
+    throw error;
+  }
+}
+
+async function dispatchQueueJob(
+  queueName: QueueName,
+  job: Job,
+  dependencies: WorkerDependencies,
+): Promise<void> {
   if (!Object.values(QUEUE_NAMES).includes(queueName)) {
     throw new Error(`Unknown queue: ${queueName}`);
   }

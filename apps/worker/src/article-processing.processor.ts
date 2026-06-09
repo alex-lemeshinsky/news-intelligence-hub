@@ -3,10 +3,14 @@ import { ArticleProcessingJobData, RegenerationJobData } from '@nih/shared';
 import {
   ArticleAnalysis,
   ArticleAnalysisEntity,
+  LlmAttemptTelemetry,
   LlmArticleAnalysisResponse,
   LlmArticleAnalyzer,
+  LlmProviderModel,
+  getLlmAttempts,
   validateArticleAnalysis,
 } from './llm-client.js';
+import { structuredLog } from './logger.js';
 import {
   ArticleProcessingStatus,
   BackgroundStatus,
@@ -233,8 +237,26 @@ export async function processRegenerationJob(
       status:
         failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
     });
+
+    structuredLog('regeneration.completed', {
+      runId: run.id,
+      userId: payload.userId,
+      requested: run.articleLabelIds.length,
+      processed,
+      failed,
+    });
   } catch (error) {
     await markRegenerationRunFailed(dependencies.database, run.id, error);
+
+    structuredLog(
+      'regeneration.failed',
+      {
+        runId: run.id,
+        userId: payload.userId,
+        error: getErrorMessage(error),
+      },
+      'error',
+    );
     throw error;
   }
 }
@@ -290,6 +312,13 @@ async function processArticleLabel(
     mode.allowedStatuses,
   );
   if (!label) {
+    structuredLog('article.process.skipped', {
+      articleLabelId: payload.articleLabelId,
+      articleId: payload.articleId,
+      userId: payload.userId,
+      operation: mode.operation,
+      reason: 'not_in_processable_state',
+    });
     return false;
   }
 
@@ -304,23 +333,15 @@ async function processArticleLabel(
       orderBy: { name: 'asc' },
       where: { userId: payload.userId },
     });
-    const cacheKey = buildCacheKey(
+    const providerModels = providerModelsForCache(dependencies.llm);
+    const cacheResult = await findCachedAnalysis(
+      dependencies.database,
       label.article.contentHash,
       categories,
       axes,
-      dependencies.llm.provider,
-      dependencies.llm.model,
+      providerModels,
       mode.cacheOperation,
     );
-    const cached = await dependencies.database.llmCache.findUnique({
-      where: { cacheKey },
-    });
-    const cacheResult = cached
-      ? {
-          cacheId: cached.id,
-          result: validateArticleAnalysis(cached.responseJson),
-        }
-      : null;
     const analysis = cacheResult?.result;
     const result =
       analysis ??
@@ -337,6 +358,14 @@ async function processArticleLabel(
       );
     let cacheId = cacheResult?.cacheId;
     if (!cacheId) {
+      const cacheKey = buildCacheKey(
+        label.article.contentHash,
+        categories,
+        axes,
+        llmResponse?.provider,
+        llmResponse?.model,
+        mode.cacheOperation,
+      );
       const cache = await dependencies.database.llmCache.create({
         data: {
           cacheKey,
@@ -388,16 +417,23 @@ async function processArticleLabel(
     });
 
     if (llmResponse) {
-      await recordTelemetry(dependencies.database, {
-        latencyMs: llmResponse.latencyMs,
-        model: llmResponse.model,
-        provider: llmResponse.provider,
-        success: true,
-        usage: llmResponse.usage,
-        userId: payload.userId,
-        operation: mode.operation,
-      });
+      await recordAttemptTelemetry(
+        dependencies.database,
+        attemptsForResponse(llmResponse, true),
+        payload.userId,
+        mode.operation,
+      );
     }
+
+    structuredLog('article.process.completed', {
+      articleLabelId: label.id,
+      articleId: label.articleId,
+      userId: payload.userId,
+      operation: mode.operation,
+      cacheHit: llmResponse === null,
+      importance: result.importance,
+      entityCount: context.entities.length,
+    });
 
     return true;
   } catch (error) {
@@ -410,21 +446,65 @@ async function processArticleLabel(
       });
     }
 
-    if (llmResponse) {
-      await recordTelemetry(dependencies.database, {
-        errorCode: getErrorMessage(error),
-        latencyMs: llmResponse.latencyMs,
-        model: llmResponse.model,
-        provider: llmResponse.provider,
-        success: false,
-        usage: llmResponse.usage,
+    await recordAttemptTelemetry(
+      dependencies.database,
+      llmResponse
+        ? attemptsForResponse(llmResponse, false, getErrorMessage(error))
+        : getLlmAttempts(error),
+      payload.userId,
+      mode.operation,
+    );
+
+    structuredLog(
+      'article.process.failed',
+      {
+        articleLabelId: label.id,
+        articleId: label.articleId,
         userId: payload.userId,
         operation: mode.operation,
-      });
-    }
+        markedFailed: mode.markLabelFailedOnError,
+        error: getErrorMessage(error),
+      },
+      'error',
+    );
 
     throw error;
   }
+}
+
+async function findCachedAnalysis(
+  database: ArticleProcessingDatabase,
+  contentHash: string,
+  categories: CategoryRecord[],
+  axes: ClassificationAxisRecord[],
+  providerModels: LlmProviderModel[],
+  operation: LlmOperation,
+): Promise<{
+  cacheId: string;
+  result: ArticleAnalysis;
+} | null> {
+  for (const providerModel of providerModels) {
+    const cacheKey = buildCacheKey(
+      contentHash,
+      categories,
+      axes,
+      providerModel.provider,
+      providerModel.model,
+      operation,
+    );
+    const cached = await database.llmCache.findUnique({
+      where: { cacheKey },
+    });
+
+    if (cached) {
+      return {
+        cacheId: cached.id,
+        result: validateArticleAnalysis(cached.responseJson),
+      };
+    }
+  }
+
+  return null;
 }
 
 async function findProcessableLabel(
@@ -845,6 +925,74 @@ async function recordTelemetry(
       userId: input.userId,
     },
   });
+}
+
+async function recordAttemptTelemetry(
+  database: ArticleProcessingDatabase,
+  attempts: LlmAttemptTelemetry[],
+  userId: string,
+  operation: LlmOperation,
+): Promise<void> {
+  for (const attempt of attempts) {
+    await recordTelemetry(database, {
+      errorCode: attempt.errorCode,
+      latencyMs: attempt.latencyMs,
+      model: attempt.model,
+      operation,
+      provider: attempt.provider,
+      success: attempt.success,
+      usage: attempt.usage,
+      userId,
+    });
+  }
+}
+
+function attemptsForResponse(
+  response: LlmArticleAnalysisResponse,
+  success: boolean,
+  errorCode?: string,
+): LlmAttemptTelemetry[] {
+  const attempts =
+    response.attempts && response.attempts.length > 0
+      ? response.attempts
+      : [
+          {
+            latencyMs: response.latencyMs,
+            model: response.model,
+            provider: response.provider,
+            success: true,
+            usage: response.usage,
+          },
+        ];
+
+  if (success) {
+    return attempts;
+  }
+
+  return attempts.map((attempt, index) =>
+    index === attempts.length - 1
+      ? {
+          ...attempt,
+          errorCode,
+          success: false,
+        }
+      : attempt,
+  );
+}
+
+function providerModelsForCache(
+  llm: LlmArticleAnalyzer,
+): LlmProviderModel[] {
+  if (llm.providerModels && llm.providerModels.length > 0) {
+    return llm.providerModels;
+  }
+
+  return [
+    {
+      model: llm.model ?? 'unknown',
+      provider: llm.provider ?? LlmProvider.OPENAI,
+    },
+  ];
 }
 
 function buildCacheKey(

@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { ArticleProcessingJobData, FeedPullJobData } from '@nih/shared';
 import { ParsedFeed, parseFeedUrl } from './feed-parser.js';
+import { structuredLog } from './logger.js';
 import { preFilterArticle } from './pre-filter.js';
 import { ArticleProcessingStatus, FeedStatus } from './prisma-enums.js';
 
@@ -51,8 +52,20 @@ export async function pullFeedJob(
 
   try {
     const parsedFeed = await (dependencies.parseFeed ?? parseFeedUrl)(feed.url);
+    let pending = 0;
+    let filtered = 0;
     for (const item of parsedFeed.items) {
-      await persistFeedItem(dependencies, payload, feed.id, item);
+      const status = await persistFeedItem(
+        dependencies,
+        payload,
+        feed.id,
+        item,
+      );
+      if (status === ArticleProcessingStatus.PENDING) {
+        pending += 1;
+      } else {
+        filtered += 1;
+      }
     }
 
     await dependencies.database.feed.update({
@@ -63,14 +76,33 @@ export async function pullFeedJob(
         title: parsedFeed.title ?? feed.title,
       },
     });
+
+    structuredLog('feed.pull.completed', {
+      feedId: feed.id,
+      userId: payload.userId,
+      itemCount: parsedFeed.items.length,
+      pending,
+      filtered,
+    });
   } catch (error) {
+    const message = getErrorMessage(error);
     await dependencies.database.feed.update({
       where: { id: feed.id },
       data: {
         status: FeedStatus.PULL_ERROR,
-        lastError: getErrorMessage(error),
+        lastError: message,
       },
     });
+
+    structuredLog(
+      'feed.pull.failed',
+      {
+        feedId: feed.id,
+        userId: payload.userId,
+        error: message,
+      },
+      'error',
+    );
     throw error;
   }
 }
@@ -80,7 +112,7 @@ async function persistFeedItem(
   payload: FeedPullJobData,
   feedId: string,
   item: ParsedFeed['items'][number],
-): Promise<void> {
+): Promise<ArticleProcessingStatus> {
   const normalizedUrl = normalizeArticleUrl(item.url);
   const preFilter = preFilterArticle(
     {
@@ -165,6 +197,8 @@ async function persistFeedItem(
       userId: payload.userId,
     });
   }
+
+  return status;
 }
 
 export function normalizeArticleUrl(url: string): string {

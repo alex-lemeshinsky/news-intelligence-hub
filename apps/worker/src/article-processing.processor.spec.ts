@@ -66,6 +66,96 @@ describe('processArticleJob', () => {
     assert.ok(calls.includes('llmTelemetry.create:true:140'));
   });
 
+  it('records failed primary telemetry, caches fallback analysis, and processes the label when failover succeeds', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls);
+    let llmCalls = 0;
+
+    await processArticleJob(
+      {
+        database,
+        llm: {
+          providerModels: [
+            { model: 'primary-model', provider: 'OPENAI' },
+            { model: 'fallback-model', provider: 'ANTHROPIC' },
+          ],
+          async analyzeArticle() {
+            llmCalls += 1;
+            return {
+              attempts: [
+                {
+                  errorCode: 'primary unavailable',
+                  latencyMs: 7,
+                  model: 'primary-model',
+                  provider: 'OPENAI',
+                  success: false,
+                  usage: {
+                    completionTokens: 0,
+                    promptTokens: 0,
+                    totalTokens: 0,
+                  },
+                },
+                {
+                  latencyMs: 31,
+                  model: 'fallback-model',
+                  provider: 'ANTHROPIC',
+                  success: true,
+                  usage: {
+                    completionTokens: 9,
+                    promptTokens: 21,
+                    totalTokens: 30,
+                  },
+                },
+              ],
+              latencyMs: 31,
+              model: 'fallback-model',
+              provider: 'ANTHROPIC',
+              result: {
+                axes: [],
+                categories: ['AI infra'],
+                entities: [],
+                importance: 'NORMAL',
+                summary: 'Fallback provider processed the article.',
+              },
+              usage: {
+                completionTokens: 9,
+                promptTokens: 21,
+                totalTokens: 30,
+              },
+            };
+          },
+        },
+      },
+      {
+        articleId: 'article_1',
+        articleLabelId: 'label_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.equal(llmCalls, 1);
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:miss').length,
+      2,
+    );
+    assert.ok(
+      calls.includes(
+        'llmCache.create:ARTICLE_ANALYSIS:ANTHROPIC:fallback-model',
+      ),
+    );
+    assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
+    assert.ok(
+      calls.includes(
+        'llmTelemetry.create:ARTICLE_ANALYSIS:OPENAI:false:0',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'llmTelemetry.create:ARTICLE_ANALYSIS:ANTHROPIC:true:30',
+      ),
+    );
+  });
+
   it('reuses cached analysis without calling the LLM', async () => {
     const calls: string[] = [];
     const database = createArticleProcessingDatabaseDouble(calls, {
@@ -99,6 +189,56 @@ describe('processArticleJob', () => {
     assert.equal(llmCalls, 0);
     assert.ok(calls.includes('llmCache.findUnique:hit'));
     assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
+  });
+
+  it('checks fallback cache after primary cache miss before spending LLM tokens', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      cachedResponses: [
+        null,
+        {
+          axes: [],
+          categories: [],
+          entities: [],
+          importance: 'NORMAL',
+          summary: 'Fallback cache summary.',
+        },
+      ],
+    });
+    let llmCalls = 0;
+
+    await processArticleJob(
+      {
+        database,
+        llm: {
+          providerModels: [
+            { model: 'primary-model', provider: 'OPENAI' },
+            { model: 'fallback-model', provider: 'ANTHROPIC' },
+          ],
+          async analyzeArticle() {
+            llmCalls += 1;
+            throw new Error('Fallback cache should avoid an LLM call.');
+          },
+        },
+      },
+      {
+        articleId: 'article_1',
+        articleLabelId: 'label_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.equal(llmCalls, 0);
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:miss').length,
+      1,
+    );
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:hit').length,
+      1,
+    );
+    assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
+    assert.ok(!calls.includes('llmTelemetry.create:true:140'));
   });
 
   it('processes a failed label when BullMQ retries the same job', async () => {
@@ -183,6 +323,69 @@ describe('processArticleJob', () => {
 
     assert.ok(calls.includes('articleLabel.update:FAILED'));
     assert.ok(calls.includes('llmTelemetry.create:false:15'));
+  });
+
+  it('marks the label failed and records every failed provider attempt when all providers fail', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls);
+
+    await assert.rejects(
+      processArticleJob(
+        {
+          database,
+          llm: {
+            async analyzeArticle() {
+              throw Object.assign(new Error('All providers failed'), {
+                attempts: [
+                  {
+                    errorCode: 'primary failed',
+                    latencyMs: 10,
+                    model: 'primary-model',
+                    provider: 'OPENAI',
+                    success: false,
+                    usage: {
+                      completionTokens: 0,
+                      promptTokens: 0,
+                      totalTokens: 0,
+                    },
+                  },
+                  {
+                    errorCode: 'fallback failed',
+                    latencyMs: 20,
+                    model: 'fallback-model',
+                    provider: 'ANTHROPIC',
+                    success: false,
+                    usage: {
+                      completionTokens: 0,
+                      promptTokens: 0,
+                      totalTokens: 0,
+                    },
+                  },
+                ],
+              });
+            },
+          },
+        },
+        {
+          articleId: 'article_1',
+          articleLabelId: 'label_1',
+          userId: 'user_1',
+        },
+      ),
+      /All providers failed/,
+    );
+
+    assert.ok(calls.includes('articleLabel.update:FAILED'));
+    assert.ok(
+      calls.includes(
+        'llmTelemetry.create:ARTICLE_ANALYSIS:OPENAI:false:0',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'llmTelemetry.create:ARTICLE_ANALYSIS:ANTHROPIC:false:0',
+      ),
+    );
   });
 });
 
@@ -470,6 +673,7 @@ interface DatabaseDoubleOptions {
   articleLabelFindManyError?: Error;
   articleLabelRows?: ArticleLabelRow[];
   cachedResponse?: unknown;
+  cachedResponses?: Array<unknown | null>;
   existingMentions?: string[];
   labelStatus?: string;
   regenerationRunArticleLabelIds?: string[];
@@ -506,6 +710,7 @@ function createArticleProcessingDatabaseDouble(
   if (options.existingMentions?.includes('entity_azure_ai')) {
     entityIds.set('azure ai', 'entity_azure_ai');
   }
+  const cacheResponses = [...(options.cachedResponses ?? [])];
 
   return {
     articleLabel: {
@@ -695,29 +900,42 @@ function createArticleProcessingDatabaseDouble(
       },
     },
     llmCache: {
-      async create(args: { data: { operation: string } }) {
+      async create(args: {
+        data: {
+          model?: string;
+          operation: string;
+          provider?: string;
+        };
+      }) {
         calls.push('llmCache.create');
         calls.push(`llmCache.create:${args.data.operation}`);
+        calls.push(
+          `llmCache.create:${args.data.operation}:${args.data.provider}:${args.data.model}`,
+        );
         return { id: 'cache_1' };
       },
       async findUnique(args: { where: { cacheKey: string } }) {
         const operation = args.where.cacheKey.split(':')[0] ?? 'unknown';
+        const queuedResponse =
+          cacheResponses.length > 0 ? cacheResponses.shift() : undefined;
+        const response =
+          queuedResponse === undefined ? options.cachedResponse : queuedResponse;
         calls.push(
-          options.cachedResponse
+          response
             ? 'llmCache.findUnique:hit'
             : 'llmCache.findUnique:miss',
         );
         calls.push(
           `llmCache.findUnique:${operation}:${
-            options.cachedResponse ? 'hit' : 'miss'
+            response ? 'hit' : 'miss'
           }`,
         );
-        return options.cachedResponse
+        return response
           ? {
               id: 'cache_existing',
               model: 'test-model',
               provider: 'OPENAI',
-              responseJson: options.cachedResponse,
+              responseJson: response,
             }
           : null;
       },
@@ -726,6 +944,7 @@ function createArticleProcessingDatabaseDouble(
       async create(args: {
         data: {
           operation: string;
+          provider?: string;
           success: boolean;
           totalTokens: number;
         };
@@ -733,6 +952,9 @@ function createArticleProcessingDatabaseDouble(
         calls.push(`llmTelemetry.create:${args.data.success}:${args.data.totalTokens}`);
         calls.push(
           `llmTelemetry.create:${args.data.operation}:${args.data.success}:${args.data.totalTokens}`,
+        );
+        calls.push(
+          `llmTelemetry.create:${args.data.operation}:${args.data.provider}:${args.data.success}:${args.data.totalTokens}`,
         );
         return { id: 'telemetry_1' };
       },
