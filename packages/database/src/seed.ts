@@ -81,11 +81,10 @@ const FEEDS: ReadonlyArray<FeedSeed> = [
     status: FeedStatus.PAUSED,
   },
   {
-    key: 'broken',
-    title: 'Legacy Wire (unreachable)',
+    key: 'research',
+    title: 'Research Weekly (paused)',
     url: 'https://demo.news-intelligence.local/legacy.xml',
-    status: FeedStatus.PULL_ERROR,
-    lastError: 'HTTP 404 while fetching feed.',
+    status: FeedStatus.PAUSED,
   },
 ];
 

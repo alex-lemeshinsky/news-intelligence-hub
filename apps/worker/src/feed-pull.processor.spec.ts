@@ -63,6 +63,41 @@ describe('scheduleFeedPullsJob', () => {
     ]);
   });
 
+  it('does not enqueue seeded demo feeds for live pulling', async () => {
+    const calls: string[] = [];
+    const enqueued: unknown[] = [];
+
+    await scheduleFeedPullsJob({
+      database: createScheduleDatabaseDouble(calls, [
+        {
+          id: 'feed_1',
+          userId: 'user_1',
+          url: 'https://demo.news-intelligence.local/techpulse.xml',
+        },
+        {
+          id: 'feed_2',
+          userId: 'user_2',
+          url: 'https://example.com/rss.xml',
+        },
+      ]),
+      enqueueFeedPull: async (payload) => {
+        calls.push(`feedPull.enqueue:${payload.feedId}`);
+        enqueued.push(payload);
+      },
+    });
+
+    assert.deepEqual(calls, [
+      'feed.findMany:ACTIVE',
+      'feedPull.enqueue:feed_2',
+    ]);
+    assert.deepEqual(enqueued, [
+      {
+        feedId: 'feed_2',
+        userId: 'user_2',
+      },
+    ]);
+  });
+
   it('fails loudly when feed pull enqueueing is not wired', async () => {
     await assert.rejects(
       scheduleFeedPullsJob({
@@ -181,9 +216,39 @@ describe('pullFeedJob', () => {
 
     assert.ok(calls.includes('feed.update:PULL_ERROR'));
   });
+
+  it('keeps seeded demo feeds active without making a network pull', async () => {
+    const calls: string[] = [];
+    const database = createDatabaseDouble(calls, {
+      url: 'https://demo.news-intelligence.local/techpulse.xml',
+    });
+    let parseCalls = 0;
+
+    await pullFeedJob(
+      {
+        database,
+        parseFeed: async () => {
+          parseCalls += 1;
+          throw new Error('demo feed should not be parsed');
+        },
+      },
+      {
+        feedId: 'feed_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.deepEqual(calls, ['feed.findFirst', 'feed.update:ACTIVE']);
+    assert.equal(parseCalls, 0);
+  });
 });
 
-function createDatabaseDouble(calls: string[]) {
+function createDatabaseDouble(
+  calls: string[],
+  feed: {
+    url?: string;
+  } = {},
+) {
   return {
     article: {
       upsertCalls: [] as Array<{ where: { normalizedUrl: string } }>,
@@ -217,7 +282,7 @@ function createDatabaseDouble(calls: string[]) {
         return {
           id: 'feed_1',
           userId: 'user_1',
-          url: 'https://example.com/rss.xml',
+          url: feed.url ?? 'https://example.com/rss.xml',
         };
       },
       async update(args: { data: { status: FeedStatus } }) {
@@ -234,7 +299,25 @@ function createDatabaseDouble(calls: string[]) {
   };
 }
 
-function createScheduleDatabaseDouble(calls: string[]) {
+function createScheduleDatabaseDouble(
+  calls: string[],
+  feeds: Array<{
+    id: string;
+    userId: string;
+    url: string;
+  }> = [
+    {
+      id: 'feed_1',
+      userId: 'user_1',
+      url: 'https://example.com/feed-1.xml',
+    },
+    {
+      id: 'feed_2',
+      userId: 'user_2',
+      url: 'https://example.com/feed-2.xml',
+    },
+  ],
+) {
   return {
     article: {
       async upsert() {
@@ -249,16 +332,7 @@ function createScheduleDatabaseDouble(calls: string[]) {
     feed: {
       async findMany(args: { where: { status: FeedStatus } }) {
         calls.push(`feed.findMany:${args.where.status}`);
-        return [
-          {
-            id: 'feed_1',
-            userId: 'user_1',
-          },
-          {
-            id: 'feed_2',
-            userId: 'user_2',
-          },
-        ];
+        return feeds;
       },
       async findFirst() {
         throw new Error('Not used by scheduled feed pulls.');

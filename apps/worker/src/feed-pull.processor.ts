@@ -6,6 +6,8 @@ import { structuredLog } from './logger.js';
 import { preFilterArticle } from './pre-filter.js';
 import { ArticleProcessingStatus, FeedStatus } from './prisma-enums.js';
 
+const DEMO_FEED_HOSTNAME = 'demo.news-intelligence.local';
+
 export interface FeedPullDependencies {
   database: FeedPullDatabase;
   enqueueArticleProcessing?: (
@@ -31,6 +33,7 @@ export interface FeedPullDatabase {
       Array<{
         id: string;
         userId: string;
+        url: string;
       }>
     >;
     findFirst(args: Record<string, unknown>): Promise<{
@@ -57,6 +60,7 @@ export async function scheduleFeedPullsJob(
     select: {
       id: true,
       userId: true,
+      url: true,
     },
     where: {
       status: FeedStatus.ACTIVE,
@@ -65,6 +69,10 @@ export async function scheduleFeedPullsJob(
 
   let enqueued = 0;
   for (const feed of feeds) {
+    if (isDemoSeedFeedUrl(feed.url)) {
+      continue;
+    }
+
     await dependencies.enqueueFeedPull(
       {
         feedId: feed.id,
@@ -99,6 +107,21 @@ export async function pullFeedJob(
 
   if (!feed) {
     throw new Error('Feed not found for user.');
+  }
+
+  if (isDemoSeedFeedUrl(feed.url)) {
+    await dependencies.database.feed.update({
+      where: { id: feed.id },
+      data: {
+        status: FeedStatus.ACTIVE,
+        lastError: null,
+      },
+    });
+    structuredLog('feed.pull.demo_skipped', {
+      feedId: feed.id,
+      userId: payload.userId,
+    });
+    return;
   }
 
   try {
@@ -275,4 +298,12 @@ function hashContent(content: string): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown feed pull error.';
+}
+
+function isDemoSeedFeedUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname === DEMO_FEED_HOSTNAME;
+  } catch {
+    return false;
+  }
 }

@@ -73,7 +73,8 @@ from `.env` (`SEED_DEMO_EMAIL` / `SEED_DEMO_PASSWORD`); the defaults are:
 These are development-only demo credentials, not real secrets. What the demo
 user gets:
 
-- Four feeds spanning every status (active, paused, and pull-error).
+- Four feeds spanning active and paused states without starting in an error
+  state.
 - Fifteen articles: thirteen processed (with summaries, importance, categories,
   axis labels, and extracted entities), one deterministically pre-filtered, one
   LLM-labelled junk, and one still pending - so all processing states are
