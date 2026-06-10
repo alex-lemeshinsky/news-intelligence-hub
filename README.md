@@ -125,6 +125,57 @@ directly rather than produced by the analysis pipeline.
 - Protected API routes derive the current user from the cookie/JWT and no longer
   accept `x-user-id` as an ownership substitute.
 
+## Implemented Should / Could Items
+
+All Should-level items in the brief are implemented:
+
+- **LLM provider failover.** Article analysis, regeneration, and digest jobs fall
+  over from the primary provider to `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL`
+  on request-level failures, recording a telemetry attempt for each provider
+  tried. See ADR-4.
+- **Meaningful unit tests for critical logic.** Covered: LLM adapter response
+  parsing/validation and failover (`apps/worker/src/llm-client.spec.ts`), the
+  deterministic pre-filter and HTML stripping (`apps/worker/src/pre-filter.spec.ts`),
+  feed pull idempotency and status handling, article processing (cache reuse,
+  invalid-output rejection, retries), regeneration and digest progress/telemetry,
+  and the tenant-scoped API services (`apps/api/src/**/*.spec.ts`).
+- **Graph filters by time window and text search.** The graph page filters by node
+  type, category, time window (24h / 7d / 30d), and a label text search.
+- **Period digests.** Day/week/month digests scoped by category and/or entity;
+  deterministic code selects top entities, top categories, and key articles, and
+  the LLM writes only the overview text (ADR-1, FR-11).
+- **Aggregated LLM telemetry dashboard.** The settings page shows calls, prompt /
+  completion / total tokens, and average latency, broken down by operation type
+  and by provider/model.
+
+Could-level items implemented:
+
+- **Semantic article similarity.** Articles are linked by a `similar` edge with a
+  score, surfaced as a "similar" counter on feed cards and article cards, and as
+  edges in the graph. Similarity is computed economically without pairwise LLM
+  calls (FR-5).
+- **Top entities and categories for a period.** Each digest result presents ranked
+  top entities, top categories, and key articles for the requested window.
+
+## Known Limitations
+
+- **Demo regeneration needs a live LLM key.** Seeded demo labels are inserted
+  directly, so re-running the regeneration action against demo data requires a
+  valid `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; without one the run fails loudly
+  rather than silently.
+- **Failover scope.** Failover covers provider/request failures (missing
+  credentials, timeouts, non-2xx responses, missing output, non-JSON output). It
+  does not retry semantically valid but low-quality output. See ADR-4.
+- **Graph layout.** Node placement is a deterministic article/entity split, not a
+  force-directed or category-clustered layout; the timeline slider, edge animation
+  over time, and graph export Could-items are not implemented.
+- **Article feed search.** Full-text search over article bodies is not
+  implemented; text search exists on the graph (node labels) and structured
+  filters (category, feed, importance, state, period) exist on the feed.
+- **Bull Board auth.** The queue dashboard uses a single shared basic-auth
+  credential from env rather than per-user access, and ships with insecure
+  defaults that must be overridden. See ADR-8.
+
 ## Architectural Decision Records
 
 ### ADR-1: Deterministic code vs LLM responsibility split
