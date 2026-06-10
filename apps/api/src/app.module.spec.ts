@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { Test } from '@nestjs/testing';
 import { AppModule } from './app.module';
 import { ArticlesModule } from './articles/articles.module';
@@ -16,8 +18,6 @@ import { FeedsModule } from './feeds/feeds.module';
 import { FeedsService } from './feeds/feeds.service';
 import { GraphModule } from './graph/graph.module';
 import { GraphService } from './graph/graph.service';
-import { LlmModule } from './llm/llm.module';
-import { LlmService } from './llm/llm.service';
 import { QueuesModule } from './queues/queues.module';
 import { QueuesService } from './queues/queues.service';
 import { TelemetryModule } from './telemetry/telemetry.module';
@@ -41,11 +41,14 @@ describe('AppModule', () => {
     expect(moduleRef.select(DigestsModule).get(DigestsService)).toBeDefined();
     expect(moduleRef.select(FeedsModule).get(FeedsService)).toBeDefined();
     expect(moduleRef.select(GraphModule).get(GraphService)).toBeDefined();
-    expect(moduleRef.select(LlmModule).get(LlmService)).toBeDefined();
     expect(moduleRef.select(QueuesModule).get(QueuesService)).toBeDefined();
     expect(
       moduleRef.select(TelemetryModule).get(TelemetryService),
     ).toBeDefined();
     expect(moduleRef.select(UsersModule).get(UsersService)).toBeDefined();
+  });
+
+  it('keeps LLM execution out of the API layer', () => {
+    expect(existsSync(join(__dirname, 'llm'))).toBe(false);
   });
 });

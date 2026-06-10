@@ -439,11 +439,11 @@ still consume Redis space when both providers fail.
 
 Context: The backend is not a thin CRUD layer. It hosts many bounded contexts
 (auth, feeds, articles, categories, axes, graph, telemetry, digests) plus
-infrastructure concerns (database access, queue producers, the LLM module and
-Bull Board), and it must enforce cross-cutting rules - cookie/JWT auth and
-per-user data isolation - uniformly across all of them. It also has to keep a
-sharp boundary between the HTTP layer, which only enqueues work, and the worker,
-which performs it.
+infrastructure concerns (database access, queue producers, and Bull Board), and
+it must enforce cross-cutting rules - cookie/JWT auth and per-user data
+isolation - uniformly across all of them. It also has to keep a sharp boundary
+between the HTTP layer, which only enqueues work, and the worker, which performs
+it, including all LLM execution.
 
 Decision: Use NestJS. Each bounded context is a feature module wired through
 NestJS's module system and dependency-injection container (`app.module.ts`
@@ -453,9 +453,11 @@ values come from env, matching the no-hard-coded-config rule. Authentication and
 tenant scoping are enforced with a cookie-auth guard plus a current-user
 decorator rather than ad-hoc checks in each handler. The HTTP-vs-worker boundary
 is expressed as a `QueuesService` that wraps BullMQ `Queue` producers: handlers
-enqueue through it and never run long or LLM work inline. Because NestJS runs on
-Express, the ready-made Bull Board router is mounted as middleware behind
-basic-auth (`bull-board.service.ts`) instead of being rebuilt in-app.
+enqueue through it and never run long or LLM work inline. The worker owns the
+provider abstraction (`apps/worker/src/llm-client.ts`) so the API has no empty or
+misleading LLM feature module. Because NestJS runs on Express, the ready-made
+Bull Board router is mounted as middleware behind basic-auth
+(`bull-board.service.ts`) instead of being rebuilt in-app.
 
 Alternatives:
 

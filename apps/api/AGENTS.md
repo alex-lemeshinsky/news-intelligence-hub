@@ -40,7 +40,7 @@ Current core modules:
   Bull Board integration.
 - `src/database`: Prisma client lifecycle wrapper for NestJS.
 - `src/users`: user ownership helpers.
-- `src/articles`, `src/categories`, `src/axes`, `src/graph`, `src/llm`,
+- `src/articles`, `src/categories`, `src/axes`, `src/graph`,
   `src/telemetry`, and `src/digests`: MVP feature modules that should grow in
   place instead of becoming unrelated utility folders.
 
