@@ -241,6 +241,102 @@ describe('processArticleJob', () => {
     assert.ok(!calls.includes('llmTelemetry.create:true:140'));
   });
 
+  it('filters unprocessable pending labels before cache or LLM work', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      articleText: 'short',
+    });
+    let llmCalls = 0;
+
+    await processArticleJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            llmCalls += 1;
+            throw new Error('LLM should not run for pre-filtered labels.');
+          },
+        },
+      },
+      {
+        articleId: 'article_1',
+        articleLabelId: 'label_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.equal(llmCalls, 0);
+    assert.ok(calls.includes('articleLabel.update:FILTERED:too_short'));
+    assert.ok(!calls.includes('category.findMany'));
+    assert.ok(!calls.includes('llmCache.findUnique:miss'));
+    assert.ok(!calls.includes('llmCache.findUnique:hit'));
+  });
+
+  it('uses the cached row when another worker stores the same analysis first', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      cacheCreateError: Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+      }),
+      cachedResponses: [
+        null,
+        {
+          axes: [],
+          categories: [],
+          entities: [],
+          importance: 'NORMAL',
+          summary: 'Concurrent cached summary.',
+        },
+      ],
+    });
+    let llmCalls = 0;
+
+    await processArticleJob(
+      {
+        database,
+        llm: {
+          async analyzeArticle() {
+            llmCalls += 1;
+            return {
+              latencyMs: 42,
+              model: 'test-model',
+              provider: 'OPENAI',
+              result: {
+                axes: [],
+                categories: [],
+                entities: [],
+                importance: 'NORMAL',
+                summary: 'Fresh summary from competing worker.',
+              },
+              usage: {
+                completionTokens: 40,
+                promptTokens: 100,
+                totalTokens: 140,
+              },
+            };
+          },
+        },
+      },
+      {
+        articleId: 'article_1',
+        articleLabelId: 'label_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.equal(llmCalls, 1);
+    assert.ok(calls.includes('llmCache.create:error:P2002'));
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:miss').length,
+      1,
+    );
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:hit').length,
+      1,
+    );
+    assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
+  });
+
   it('processes a failed label when BullMQ retries the same job', async () => {
     const calls: string[] = [];
     const database = createArticleProcessingDatabaseDouble(calls, {
@@ -670,6 +766,8 @@ describe('processRegenerationJob', () => {
 });
 
 interface DatabaseDoubleOptions {
+  articleText?: string;
+  cacheCreateError?: Error;
   articleLabelFindManyError?: Error;
   articleLabelRows?: ArticleLabelRow[];
   cachedResponse?: unknown;
@@ -749,7 +847,9 @@ function createArticleProcessingDatabaseDouble(
         return {
           article: {
             contentHash: `hash_${label.id}`,
-            extractedText: 'Microsoft announced Azure AI runtime updates.'.repeat(20),
+            extractedText:
+              options.articleText ??
+              'Microsoft announced Azure AI runtime updates.'.repeat(20),
             id: label.articleId,
             publishedAt: new Date('2026-05-27T10:00:00.000Z'),
             title: 'Microsoft ships a new AI runtime',
@@ -763,12 +863,15 @@ function createArticleProcessingDatabaseDouble(
       async update(args: {
         data: {
           importance?: string;
+          preFilterReason?: string;
           status: string;
         };
       }) {
         calls.push(
           args.data.status === 'PROCESSED'
             ? `articleLabel.update:${args.data.status}:${args.data.importance}`
+            : args.data.status === 'FILTERED'
+              ? `articleLabel.update:${args.data.status}:${args.data.preFilterReason}`
             : `articleLabel.update:${args.data.status}`,
         );
         return { id: 'label_1' };
@@ -907,6 +1010,14 @@ function createArticleProcessingDatabaseDouble(
           provider?: string;
         };
       }) {
+        if (options.cacheCreateError) {
+          const error = options.cacheCreateError as Error & {
+            code?: string;
+          };
+          calls.push(`llmCache.create:error:${error.code ?? 'unknown'}`);
+          throw options.cacheCreateError;
+        }
+
         calls.push('llmCache.create');
         calls.push(`llmCache.create:${args.data.operation}`);
         calls.push(

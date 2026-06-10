@@ -11,6 +11,7 @@ import {
   validateArticleAnalysis,
 } from './llm-client.js';
 import { structuredLog } from './logger.js';
+import { preFilterArticle } from './pre-filter.js';
 import {
   ArticleProcessingStatus,
   BackgroundStatus,
@@ -18,6 +19,8 @@ import {
   LlmOperation,
   LlmProvider,
 } from './prisma-enums.js';
+
+const DEFAULT_MIN_CONTENT_CHARS = 500;
 
 export interface ArticleProcessingDependencies {
   database: ArticleProcessingDatabase;
@@ -78,6 +81,7 @@ interface ArticleLabelRecord {
     extractedText: string | null;
     id: string;
     publishedAt: Date | null;
+    rawContent?: string | null;
     title: string;
   };
   articleId: string;
@@ -325,6 +329,40 @@ async function processArticleLabel(
   let llmResponse: LlmArticleAnalysisResponse | null = null;
 
   try {
+    if (mode.operation === LlmOperation.ARTICLE_ANALYSIS) {
+      const preFilter = preFilterArticle(
+        {
+          content: label.article.extractedText ?? label.article.rawContent ?? '',
+          title: label.article.title,
+        },
+        {
+          minContentChars: parsePositiveIntegerEnv(
+            'ARTICLE_MIN_CONTENT_CHARS',
+            DEFAULT_MIN_CONTENT_CHARS,
+          ),
+        },
+      );
+
+      if (!preFilter.accepted) {
+        await dependencies.database.articleLabel.update({
+          data: {
+            preFilterReason: preFilter.reason,
+            status: ArticleProcessingStatus.FILTERED,
+          },
+          where: { id: label.id },
+        });
+
+        structuredLog('article.process.filtered', {
+          articleLabelId: label.id,
+          articleId: label.articleId,
+          userId: payload.userId,
+          reason: preFilter.reason,
+        });
+
+        return true;
+      }
+    }
+
     const categories = await dependencies.database.category.findMany({
       orderBy: { name: 'asc' },
       where: { userId: payload.userId },
@@ -343,7 +381,7 @@ async function processArticleLabel(
       mode.cacheOperation,
     );
     const analysis = cacheResult?.result;
-    const result =
+    let result =
       analysis ??
       validateArticleAnalysis(
         (llmResponse = await dependencies.llm.analyzeArticle({
@@ -366,23 +404,24 @@ async function processArticleLabel(
         llmResponse?.model,
         mode.cacheOperation,
       );
-      const cache = await dependencies.database.llmCache.create({
-        data: {
-          cacheKey,
+      const cache = await createOrReadAnalysisCache(dependencies.database, {
+        cacheKey,
+        contentHash: label.article.contentHash,
+        model: llmResponse?.model ?? dependencies.llm.model ?? 'unknown',
+        operation: mode.cacheOperation,
+        provider:
+          llmResponse?.provider ??
+          dependencies.llm.provider ??
+          LlmProvider.OPENAI,
+        result,
+        usage: {
           completionTokens: llmResponse?.usage.completionTokens ?? 0,
-          contentHash: label.article.contentHash,
-          model: llmResponse?.model ?? dependencies.llm.model ?? 'unknown',
-          operation: mode.cacheOperation,
           promptTokens: llmResponse?.usage.promptTokens ?? 0,
-          provider:
-            llmResponse?.provider ??
-            dependencies.llm.provider ??
-            LlmProvider.OPENAI,
-          responseJson: result,
           totalTokens: llmResponse?.usage.totalTokens ?? 0,
         },
       });
       cacheId = cache.id;
+      result = cache.result;
     }
 
     const previousMentionEntityIds = await findMentionEntityIds(
@@ -469,6 +508,62 @@ async function processArticleLabel(
     );
 
     throw error;
+  }
+}
+
+async function createOrReadAnalysisCache(
+  database: ArticleProcessingDatabase,
+  input: {
+    cacheKey: string;
+    contentHash: string;
+    model: string;
+    operation: LlmOperation;
+    provider: LlmProvider;
+    result: ArticleAnalysis;
+    usage: {
+      completionTokens: number;
+      promptTokens: number;
+      totalTokens: number;
+    };
+  },
+): Promise<{
+  id: string;
+  result: ArticleAnalysis;
+}> {
+  try {
+    const cache = await database.llmCache.create({
+      data: {
+        cacheKey: input.cacheKey,
+        completionTokens: input.usage.completionTokens,
+        contentHash: input.contentHash,
+        model: input.model,
+        operation: input.operation,
+        promptTokens: input.usage.promptTokens,
+        provider: input.provider,
+        responseJson: input.result,
+        totalTokens: input.usage.totalTokens,
+      },
+    });
+    return {
+      id: cache.id,
+      result: input.result,
+    };
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const cache = await database.llmCache.findUnique({
+      where: { cacheKey: input.cacheKey },
+    });
+    if (!cache) {
+      throw error;
+    }
+
+    return {
+      id: cache.id,
+      result: validateArticleAnalysis(cache.responseJson),
+    };
   }
 }
 
@@ -1017,6 +1112,25 @@ function buildCacheKey(
     )
     .digest('hex');
   return `${operation}:${contentHash}:${configurationHash}`;
+}
+
+function parsePositiveIntegerEnv(name: string, fallback: number): number {
+  const rawValue = process.env[name];
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const value = Number.parseInt(rawValue, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'P2002'
+  );
 }
 
 function mergeAliases(
