@@ -4,6 +4,7 @@ import {
   JOB_NAMES,
   QUEUE_NAMES,
   type ArticleProcessingJobData,
+  type FeedPullJobData,
   type QueueName,
 } from '@nih/shared';
 import { disconnectPrismaClient, getPrismaClient } from '@nih/database';
@@ -13,6 +14,10 @@ import type { FeedPullDatabase } from './feed-pull.processor.js';
 import { createConfiguredLlmClient } from './llm-client.js';
 import { structuredLog } from './logger.js';
 import { handleQueueJob } from './processors.js';
+
+const DEFAULT_FEED_PULL_CRON = '*/15 * * * *';
+const FEED_PULL_SCHEDULER_ID = 'active-feed-pull-scheduler';
+const FEED_PULL_SCHEDULER_START_DELAY_MS = 60_000;
 
 if (!process.env.DATABASE_URL?.trim()) {
   throw new Error('DATABASE_URL is required to start the worker.');
@@ -47,6 +52,19 @@ const dependencies = {
   },
   feedPull: {
     database: prismaClient as unknown as FeedPullDatabase,
+    enqueueFeedPull: async (
+      payload: FeedPullJobData,
+      options: JobsOptions = {},
+    ) => {
+      await getQueue(QUEUE_NAMES.feedPull).add(
+        JOB_NAMES.pullFeed,
+        payload,
+        {
+          ...defaultJobOptions(),
+          ...options,
+        },
+      );
+    },
     enqueueArticleProcessing: async (payload: ArticleProcessingJobData) => {
       await getQueue(QUEUE_NAMES.articleProcessing).add(
         JOB_NAMES.processArticle,
@@ -82,6 +100,8 @@ function createWorker(name: QueueName): Worker {
 const queues = Object.values(QUEUE_NAMES).map(createQueue);
 const workers = Object.values(QUEUE_NAMES).map(createWorker);
 
+await configureScheduledFeedPulls();
+
 function defaultJobOptions(): JobsOptions {
   return {
     attempts: parseIntegerEnv('QUEUE_JOB_ATTEMPTS', 3),
@@ -102,6 +122,27 @@ function parseIntegerEnv(name: string, fallback: number): number {
 
   const value = Number.parseInt(rawValue, 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+async function configureScheduledFeedPulls(): Promise<void> {
+  const pattern =
+    process.env.FEED_PULL_CRON?.trim() || DEFAULT_FEED_PULL_CRON;
+  const startDate = Date.now() + FEED_PULL_SCHEDULER_START_DELAY_MS;
+  await getQueue(QUEUE_NAMES.feedPull).upsertJobScheduler(
+    FEED_PULL_SCHEDULER_ID,
+    { pattern, startDate },
+    {
+      data: {},
+      name: JOB_NAMES.scheduleFeedPulls,
+      opts: defaultJobOptions(),
+    },
+  );
+
+  structuredLog('feed.pull.scheduler.configured', {
+    pattern,
+    schedulerId: FEED_PULL_SCHEDULER_ID,
+    startDate: new Date(startDate).toISOString(),
+  });
 }
 
 async function shutdown(): Promise<void> {

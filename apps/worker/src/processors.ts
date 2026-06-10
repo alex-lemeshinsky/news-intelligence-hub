@@ -14,7 +14,11 @@ import {
   processRegenerationJob,
 } from './article-processing.processor.js';
 import { DigestDependencies, processDigestJob } from './digest.processor.js';
-import { FeedPullDependencies, pullFeedJob } from './feed-pull.processor.js';
+import {
+  FeedPullDependencies,
+  pullFeedJob,
+  scheduleFeedPullsJob,
+} from './feed-pull.processor.js';
 import { errorMessage, structuredLog } from './logger.js';
 
 export interface WorkerDependencies {
@@ -67,6 +71,14 @@ async function dispatchQueueJob(
 
   if (queueName === QUEUE_NAMES.feedPull && job.name === JOB_NAMES.pullFeed) {
     await pullFeedJob(dependencies.feedPull, job.data as FeedPullJobData);
+    return;
+  }
+
+  if (
+    queueName === QUEUE_NAMES.feedPull &&
+    job.name === JOB_NAMES.scheduleFeedPulls
+  ) {
+    await scheduleFeedPullsJob(dependencies.feedPull);
     return;
   }
 

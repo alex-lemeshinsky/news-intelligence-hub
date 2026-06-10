@@ -1,7 +1,77 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ArticleProcessingStatus, FeedStatus } from './prisma-enums.js';
-import { pullFeedJob } from './feed-pull.processor.js';
+import {
+  pullFeedJob,
+  scheduleFeedPullsJob,
+} from './feed-pull.processor.js';
+
+describe('scheduleFeedPullsJob', () => {
+  it('enqueues one deduplicated pull job for each active feed', async () => {
+    const calls: string[] = [];
+    const enqueued: Array<{
+      options: {
+        deduplication?: {
+          id: string;
+          keepLastIfActive?: boolean;
+        };
+      };
+      payload: {
+        feedId: string;
+        userId: string;
+      };
+    }> = [];
+
+    await scheduleFeedPullsJob({
+      database: createScheduleDatabaseDouble(calls),
+      enqueueFeedPull: async (payload, options = {}) => {
+        calls.push(`feedPull.enqueue:${payload.feedId}`);
+        enqueued.push({ options, payload });
+      },
+    });
+
+    assert.deepEqual(calls, [
+      'feed.findMany:ACTIVE',
+      'feedPull.enqueue:feed_1',
+      'feedPull.enqueue:feed_2',
+    ]);
+    assert.deepEqual(enqueued, [
+      {
+        payload: {
+          feedId: 'feed_1',
+          userId: 'user_1',
+        },
+        options: {
+          deduplication: {
+            id: 'feed-pull:feed_1',
+            keepLastIfActive: true,
+          },
+        },
+      },
+      {
+        payload: {
+          feedId: 'feed_2',
+          userId: 'user_2',
+        },
+        options: {
+          deduplication: {
+            id: 'feed-pull:feed_2',
+            keepLastIfActive: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('fails loudly when feed pull enqueueing is not wired', async () => {
+    await assert.rejects(
+      scheduleFeedPullsJob({
+        database: createScheduleDatabaseDouble([]),
+      }),
+      /Feed pull enqueue dependency is required/,
+    );
+  });
+});
 
 describe('pullFeedJob', () => {
   it('persists feed articles and marks usable content pending processing', async () => {
@@ -159,6 +229,47 @@ function createDatabaseDouble(calls: string[]) {
       async upsert() {
         calls.push('feedArticle.upsert');
         return { id: 'feed_article_1' };
+      },
+    },
+  };
+}
+
+function createScheduleDatabaseDouble(calls: string[]) {
+  return {
+    article: {
+      async upsert() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
+    articleLabel: {
+      async upsert() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
+    feed: {
+      async findMany(args: { where: { status: FeedStatus } }) {
+        calls.push(`feed.findMany:${args.where.status}`);
+        return [
+          {
+            id: 'feed_1',
+            userId: 'user_1',
+          },
+          {
+            id: 'feed_2',
+            userId: 'user_2',
+          },
+        ];
+      },
+      async findFirst() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+      async update() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
+    feedArticle: {
+      async upsert() {
+        throw new Error('Not used by scheduled feed pulls.');
       },
     },
   };

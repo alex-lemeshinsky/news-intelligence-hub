@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import type { JobsOptions } from 'bullmq';
 import { ArticleProcessingJobData, FeedPullJobData } from '@nih/shared';
 import { ParsedFeed, parseFeedUrl } from './feed-parser.js';
 import { structuredLog } from './logger.js';
@@ -9,6 +10,10 @@ export interface FeedPullDependencies {
   database: FeedPullDatabase;
   enqueueArticleProcessing?: (
     payload: ArticleProcessingJobData,
+  ) => Promise<void>;
+  enqueueFeedPull?: (
+    payload: FeedPullJobData,
+    options?: JobsOptions,
   ) => Promise<void>;
   parseFeed?: (url: string) => Promise<ParsedFeed>;
   minContentChars?: number;
@@ -22,6 +27,12 @@ export interface FeedPullDatabase {
     upsert(args: Record<string, unknown>): Promise<{ id: string }>;
   };
   feed: {
+    findMany(args: Record<string, unknown>): Promise<
+      Array<{
+        id: string;
+        userId: string;
+      }>
+    >;
     findFirst(args: Record<string, unknown>): Promise<{
       id: string;
       userId: string;
@@ -33,6 +44,46 @@ export interface FeedPullDatabase {
   feedArticle: {
     upsert(args: Record<string, unknown>): Promise<unknown>;
   };
+}
+
+export async function scheduleFeedPullsJob(
+  dependencies: FeedPullDependencies,
+): Promise<void> {
+  if (!dependencies.enqueueFeedPull) {
+    throw new Error('Feed pull enqueue dependency is required.');
+  }
+
+  const feeds = await dependencies.database.feed.findMany({
+    select: {
+      id: true,
+      userId: true,
+    },
+    where: {
+      status: FeedStatus.ACTIVE,
+    },
+  });
+
+  let enqueued = 0;
+  for (const feed of feeds) {
+    await dependencies.enqueueFeedPull(
+      {
+        feedId: feed.id,
+        userId: feed.userId,
+      },
+      {
+        deduplication: {
+          id: `feed-pull:${feed.id}`,
+          keepLastIfActive: true,
+        },
+      },
+    );
+    enqueued += 1;
+  }
+
+  structuredLog('feed.pull.schedule.completed', {
+    activeFeeds: feeds.length,
+    enqueued,
+  });
 }
 
 export async function pullFeedJob(

@@ -9,6 +9,7 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
 export const JOB_NAMES = {
   pullFeed: 'pull-feed',
+  scheduleFeedPulls: 'schedule-feed-pulls',
   processArticle: 'process-article',
   regenerateArticles: 'regenerate-articles',
   buildDigest: 'build-digest',
