@@ -5,19 +5,14 @@
 # overrides the command per service. Build stages are layer-cached so the heavy
 # install/build runs once and is reused.
 
-FROM node:22-bookworm-slim AS base
-# OpenSSL + CA certs are required by the Prisma query engine at runtime.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+# The full Bookworm image is larger than slim, but it already includes
+# OpenSSL, CA certificates, and the native build toolchain. That avoids slow and
+# failure-prone apt traffic during a reviewer cold build.
+FROM node:22-bookworm AS base
 WORKDIR /app
 
 # ---- deps: install all workspace dependencies (cached on manifest changes) ----
 FROM base AS deps
-# Toolchain for native modules (argon2). Only present in the build pipeline.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
 # Copy only manifests first so `npm ci` is cached unless dependencies change.
 COPY package.json package-lock.json ./
 COPY apps/api/package.json ./apps/api/package.json
@@ -25,7 +20,7 @@ COPY apps/web/package.json ./apps/web/package.json
 COPY apps/worker/package.json ./apps/worker/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
 COPY packages/database/package.json ./packages/database/package.json
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # ---- build: compile every workspace and generate the Prisma client ----
 FROM deps AS build
@@ -42,7 +37,7 @@ RUN npm run db:generate \
   && npm run build:worker \
   && npm run build:web
 
-# ---- runtime: lean image without the build toolchain ----
+# ---- runtime ----
 FROM base AS runtime
 ENV NODE_ENV=production
 # Copy the fully built workspace, including node_modules with the generated
