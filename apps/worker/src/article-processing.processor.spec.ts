@@ -245,6 +245,7 @@ describe('processArticleJob', () => {
     const calls: string[] = [];
     const database = createArticleProcessingDatabaseDouble(calls, {
       articleText: 'short',
+      existingMentions: ['entity_microsoft', 'entity_azure_ai'],
     });
     let llmCalls = 0;
 
@@ -267,9 +268,76 @@ describe('processArticleJob', () => {
 
     assert.equal(llmCalls, 0);
     assert.ok(calls.includes('articleLabel.update:FILTERED:too_short'));
+    assert.ok(calls.includes('articleLabel.update:FILTERED:cleared'));
+    assert.ok(calls.includes('articleCategoryAssignment.deleteMany'));
+    assert.ok(calls.includes('articleAxisAssignment.deleteMany'));
+    assert.ok(calls.includes('articleEntityMention.deleteMany'));
+    assert.ok(
+      calls.includes(
+        'graphEdge.deleteMany:MENTIONS:article:article_1->entity:entity_microsoft',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'graphEdge.deleteMany:CO_MENTION:entity:entity_azure_ai->entity:entity_microsoft',
+      ),
+    );
     assert.ok(!calls.includes('category.findMany'));
     assert.ok(!calls.includes('llmCache.findUnique:miss'));
     assert.ok(!calls.includes('llmCache.findUnique:hit'));
+  });
+
+  it('rechecks cache under the analysis lock before calling the LLM', async () => {
+    const calls: string[] = [];
+    const database = createArticleProcessingDatabaseDouble(calls, {
+      cachedResponses: [
+        null,
+        {
+          axes: [],
+          categories: [],
+          entities: [],
+          importance: 'NORMAL',
+          summary: 'Cache filled while waiting for the lock.',
+        },
+      ],
+    });
+    let llmCalls = 0;
+    let lockCalls = 0;
+
+    await processArticleJob(
+      {
+        cacheLocks: {
+          async withLock(_key, work) {
+            lockCalls += 1;
+            return work();
+          },
+        },
+        database,
+        llm: {
+          async analyzeArticle() {
+            llmCalls += 1;
+            throw new Error('LLM should not run after lock cache recheck.');
+          },
+        },
+      },
+      {
+        articleId: 'article_1',
+        articleLabelId: 'label_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.equal(lockCalls, 1);
+    assert.equal(llmCalls, 0);
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:miss').length,
+      1,
+    );
+    assert.equal(
+      calls.filter((call) => call === 'llmCache.findUnique:hit').length,
+      1,
+    );
+    assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
   });
 
   it('uses the cached row when another worker stores the same analysis first', async () => {
@@ -862,8 +930,11 @@ function createArticleProcessingDatabaseDouble(
       },
       async update(args: {
         data: {
-          importance?: string;
+          importance?: string | null;
+          llmCacheId?: string | null;
           preFilterReason?: string;
+          processedAt?: Date | null;
+          summary?: string | null;
           status: string;
         };
       }) {
@@ -874,6 +945,15 @@ function createArticleProcessingDatabaseDouble(
               ? `articleLabel.update:${args.data.status}:${args.data.preFilterReason}`
             : `articleLabel.update:${args.data.status}`,
         );
+        if (
+          args.data.status === 'FILTERED' &&
+          args.data.importance === null &&
+          args.data.llmCacheId === null &&
+          args.data.processedAt === null &&
+          args.data.summary === null
+        ) {
+          calls.push('articleLabel.update:FILTERED:cleared');
+        }
         return { id: 'label_1' };
       },
     },

@@ -1,5 +1,7 @@
 import { createHash } from 'crypto';
 import { ArticleProcessingJobData, RegenerationJobData } from '@nih/shared';
+import { clearArticleAnalysis } from './analysis-cleanup.js';
+import type { CacheLockCoordinator } from './cache-lock.js';
 import {
   ArticleAnalysis,
   ArticleAnalysisEntity,
@@ -23,6 +25,7 @@ import {
 const DEFAULT_MIN_CONTENT_CHARS = 500;
 
 export interface ArticleProcessingDependencies {
+  cacheLocks?: CacheLockCoordinator;
   database: ArticleProcessingDatabase;
   llm: LlmArticleAnalyzer;
 }
@@ -344,10 +347,20 @@ async function processArticleLabel(
       );
 
       if (!preFilter.accepted) {
+        await clearArticleAnalysis(dependencies.database, {
+          articleId: label.article.id,
+          articleLabelId: label.id,
+          userId: payload.userId,
+        });
+
         await dependencies.database.articleLabel.update({
           data: {
+            importance: null,
+            llmCacheId: null,
             preFilterReason: preFilter.reason,
+            processedAt: null,
             status: ArticleProcessingStatus.FILTERED,
+            summary: null,
           },
           where: { id: label.id },
         });
@@ -380,11 +393,34 @@ async function processArticleLabel(
       providerModels,
       mode.cacheOperation,
     );
-    const analysis = cacheResult?.result;
-    let result =
-      analysis ??
-      validateArticleAnalysis(
-        (llmResponse = await dependencies.llm.analyzeArticle({
+    let result: ArticleAnalysis;
+    let cacheId: string;
+    if (cacheResult) {
+      result = cacheResult.result;
+      cacheId = cacheResult.cacheId;
+    } else {
+      const resolveAnalysis = async (
+        recheckCache: boolean,
+      ): Promise<ResolvedAnalysis> => {
+        if (recheckCache) {
+          const lockedCacheResult = await findCachedAnalysis(
+            dependencies.database,
+            label.article.contentHash,
+            categories,
+            axes,
+            providerModels,
+            mode.cacheOperation,
+          );
+          if (lockedCacheResult) {
+            return {
+              cacheId: lockedCacheResult.cacheId,
+              llmResponse: null,
+              result: lockedCacheResult.result,
+            };
+          }
+        }
+
+        const response = await dependencies.llm.analyzeArticle({
           axes: axes.map((axis) => ({
             name: axis.name,
             values: axis.values,
@@ -392,36 +428,47 @@ async function processArticleLabel(
           categories: categories.map((category) => ({ name: category.name })),
           text: label.article.extractedText ?? '',
           title: label.article.title,
-        })).result,
-      );
-    let cacheId = cacheResult?.cacheId;
-    if (!cacheId) {
-      const cacheKey = buildCacheKey(
+        });
+        llmResponse = response;
+        const validatedResult = validateArticleAnalysis(response.result);
+        const cacheKey = buildCacheKey(
+          label.article.contentHash,
+          categories,
+          axes,
+          response.provider,
+          response.model,
+          mode.cacheOperation,
+        );
+        const cache = await createOrReadAnalysisCache(dependencies.database, {
+          cacheKey,
+          contentHash: label.article.contentHash,
+          model: response.model,
+          operation: mode.cacheOperation,
+          provider: response.provider,
+          result: validatedResult,
+          usage: response.usage,
+        });
+        return {
+          cacheId: cache.id,
+          llmResponse: response,
+          result: cache.result,
+        };
+      };
+      const lockKey = buildAnalysisLockKey(
         label.article.contentHash,
         categories,
         axes,
-        llmResponse?.provider,
-        llmResponse?.model,
+        providerModels,
         mode.cacheOperation,
       );
-      const cache = await createOrReadAnalysisCache(dependencies.database, {
-        cacheKey,
-        contentHash: label.article.contentHash,
-        model: llmResponse?.model ?? dependencies.llm.model ?? 'unknown',
-        operation: mode.cacheOperation,
-        provider:
-          llmResponse?.provider ??
-          dependencies.llm.provider ??
-          LlmProvider.OPENAI,
-        result,
-        usage: {
-          completionTokens: llmResponse?.usage.completionTokens ?? 0,
-          promptTokens: llmResponse?.usage.promptTokens ?? 0,
-          totalTokens: llmResponse?.usage.totalTokens ?? 0,
-        },
-      });
-      cacheId = cache.id;
-      result = cache.result;
+      const resolvedAnalysis = dependencies.cacheLocks
+        ? await dependencies.cacheLocks.withLock(lockKey, () =>
+            resolveAnalysis(true),
+          )
+        : await resolveAnalysis(false);
+      cacheId = resolvedAnalysis.cacheId;
+      llmResponse = resolvedAnalysis.llmResponse;
+      result = resolvedAnalysis.result;
     }
 
     const previousMentionEntityIds = await findMentionEntityIds(
@@ -509,6 +556,12 @@ async function processArticleLabel(
 
     throw error;
   }
+}
+
+interface ResolvedAnalysis {
+  cacheId: string;
+  llmResponse: LlmArticleAnalysisResponse | null;
+  result: ArticleAnalysis;
 }
 
 async function createOrReadAnalysisCache(
@@ -1108,6 +1161,28 @@ function buildCacheKey(
         categories: categories.map((category) => category.name),
         model: model ?? 'unknown',
         provider: provider ?? 'unknown',
+      }),
+    )
+    .digest('hex');
+  return `${operation}:${contentHash}:${configurationHash}`;
+}
+
+function buildAnalysisLockKey(
+  contentHash: string,
+  categories: CategoryRecord[],
+  axes: ClassificationAxisRecord[],
+  providerModels: LlmProviderModel[],
+  operation: LlmOperation,
+): string {
+  const configurationHash = createHash('sha256')
+    .update(
+      JSON.stringify({
+        axes: axes.map((axis) => ({
+          name: axis.name,
+          values: axis.values,
+        })),
+        categories: categories.map((category) => category.name),
+        providerModels,
       }),
     )
     .digest('hex');

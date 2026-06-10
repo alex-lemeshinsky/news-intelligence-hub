@@ -332,7 +332,10 @@ Decision: Cost is controlled in layered defenses, cheapest first.
 5. Output size and latency are bounded per call by `LLM_MAX_OUTPUT_TOKENS` and
    `LLM_REQUEST_TIMEOUT_MS`, and the number of simultaneous in-flight model calls
    is capped by `LLM_CONCURRENCY` on the article-processing worker (separate from
-   `WORKER_CONCURRENCY` for the cheap deterministic queues).
+   `WORKER_CONCURRENCY` for the cheap deterministic queues). Same-key article
+   analysis uses a Redis lock (`LLM_CACHE_LOCK_TTL_MS`,
+   `LLM_CACHE_LOCK_WAIT_MS`, `LLM_CACHE_LOCK_RETRY_MS`) so concurrent workers
+   re-check the cache before making duplicate model calls.
 6. Period digest jobs use deterministic aggregation for top entities,
    categories, and key articles, then spend at most one `DIGEST` call for the
    final overview. Empty digest result sets complete without an LLM call.

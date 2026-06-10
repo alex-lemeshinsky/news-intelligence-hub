@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import type { JobsOptions } from 'bullmq';
 import { ArticleProcessingJobData, FeedPullJobData } from '@nih/shared';
+import { clearArticleAnalysis } from './analysis-cleanup.js';
 import { ParsedFeed, parseFeedUrl } from './feed-parser.js';
 import { structuredLog } from './logger.js';
 import { preFilterArticle } from './pre-filter.js';
@@ -22,6 +23,21 @@ export interface FeedPullDependencies {
 }
 
 export interface FeedPullDatabase {
+  articleAxisAssignment: {
+    deleteMany(args: Record<string, unknown>): Promise<unknown>;
+  };
+  articleCategoryAssignment: {
+    deleteMany(args: Record<string, unknown>): Promise<unknown>;
+  };
+  articleEntityMention: {
+    deleteMany(args: Record<string, unknown>): Promise<unknown>;
+    findMany(args: Record<string, unknown>): Promise<
+      Array<{
+        articleLabelId: string;
+        entityId: string;
+      }>
+    >;
+  };
   article: {
     upsert(args: Record<string, unknown>): Promise<{ id: string }>;
   };
@@ -46,6 +62,10 @@ export interface FeedPullDatabase {
   };
   feedArticle: {
     upsert(args: Record<string, unknown>): Promise<unknown>;
+  };
+  graphEdge: {
+    deleteMany(args: Record<string, unknown>): Promise<unknown>;
+    updateMany(args: Record<string, unknown>): Promise<unknown>;
   };
 }
 
@@ -259,6 +279,14 @@ async function persistFeedItem(
       preFilterReason: preFilter.reason,
     },
     update: {
+      ...(status === ArticleProcessingStatus.FILTERED
+        ? {
+            importance: null,
+            llmCacheId: null,
+            processedAt: null,
+            summary: null,
+          }
+        : {}),
       status,
       preFilterReason: preFilter.reason,
     },
@@ -266,6 +294,12 @@ async function persistFeedItem(
 
   if (status === ArticleProcessingStatus.PENDING) {
     await dependencies.enqueueArticleProcessing?.({
+      articleId: article.id,
+      articleLabelId: articleLabel.id,
+      userId: payload.userId,
+    });
+  } else {
+    await clearArticleAnalysis(dependencies.database, {
       articleId: article.id,
       articleLabelId: articleLabel.id,
       userId: payload.userId,

@@ -9,6 +9,7 @@ import {
 } from '@nih/shared';
 import { disconnectPrismaClient, getPrismaClient } from '@nih/database';
 import type { ArticleProcessingDatabase } from './article-processing.processor.js';
+import { RedisCacheLockCoordinator } from './cache-lock.js';
 import type { DigestDatabase } from './digest.processor.js';
 import type { FeedPullDatabase } from './feed-pull.processor.js';
 import { createConfiguredLlmClient } from './llm-client.js';
@@ -28,6 +29,14 @@ const connection = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
 });
 const prismaClient = getPrismaClient();
+const cacheLocks = new RedisCacheLockCoordinator(connection, {
+  retryMs: parseIntegerEnv('LLM_CACHE_LOCK_RETRY_MS', 250),
+  ttlMs: parseIntegerEnv('LLM_CACHE_LOCK_TTL_MS', 120000),
+  waitMs: parseIntegerEnv(
+    'LLM_CACHE_LOCK_WAIT_MS',
+    parseIntegerEnv('LLM_REQUEST_TIMEOUT_MS', 30000),
+  ),
+});
 const queueMap = new Map<QueueName, Queue>();
 
 function getQueue(name: QueueName): Queue {
@@ -43,6 +52,7 @@ function getQueue(name: QueueName): Queue {
 
 const dependencies = {
   articleProcessing: {
+    cacheLocks,
     database: prismaClient as unknown as ArticleProcessingDatabase,
     llm: createConfiguredLlmClient(),
   },

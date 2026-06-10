@@ -193,6 +193,53 @@ describe('pullFeedJob', () => {
     assert.equal(enqueuedJobs, 0);
   });
 
+  it('clears stale analysis when a pulled article becomes filtered', async () => {
+    const calls: string[] = [];
+    const database = createDatabaseDouble(calls, {
+      existingMentions: ['entity_microsoft', 'entity_azure_ai'],
+    });
+
+    await pullFeedJob(
+      {
+        database,
+        enqueueArticleProcessing: async () => {
+          throw new Error('Filtered articles should not be enqueued.');
+        },
+        parseFeed: async () => ({
+          title: 'Tech Feed',
+          items: [
+            {
+              title: 'Tiny replacement',
+              url: 'https://example.com/tiny',
+              content: 'short',
+            },
+          ],
+        }),
+        minContentChars: 500,
+      },
+      {
+        feedId: 'feed_1',
+        userId: 'user_1',
+      },
+    );
+
+    assert.ok(calls.includes('articleLabel.upsert:FILTERED'));
+    assert.ok(calls.includes('articleLabel.upsert:FILTERED:cleared'));
+    assert.ok(calls.includes('articleCategoryAssignment.deleteMany'));
+    assert.ok(calls.includes('articleAxisAssignment.deleteMany'));
+    assert.ok(calls.includes('articleEntityMention.deleteMany'));
+    assert.ok(
+      calls.includes(
+        'graphEdge.deleteMany:MENTIONS:article:article_1->entity:entity_microsoft',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'graphEdge.deleteMany:CO_MENTION:entity:entity_azure_ai->entity:entity_microsoft',
+      ),
+    );
+  });
+
   it('marks the feed with pull error when parsing fails', async () => {
     const calls: string[] = [];
     const database = createDatabaseDouble(calls);
@@ -246,10 +293,39 @@ describe('pullFeedJob', () => {
 function createDatabaseDouble(
   calls: string[],
   feed: {
+    existingMentions?: string[];
     url?: string;
   } = {},
 ) {
+  const mentionRecords = (feed.existingMentions ?? []).map((entityId) => ({
+    articleLabelId: 'label_1',
+    entityId,
+  }));
+
   return {
+    articleAxisAssignment: {
+      async deleteMany() {
+        calls.push('articleAxisAssignment.deleteMany');
+        return { count: 0 };
+      },
+    },
+    articleCategoryAssignment: {
+      async deleteMany() {
+        calls.push('articleCategoryAssignment.deleteMany');
+        return { count: 0 };
+      },
+    },
+    articleEntityMention: {
+      async deleteMany() {
+        calls.push('articleEntityMention.deleteMany');
+        mentionRecords.length = 0;
+        return { count: 0 };
+      },
+      async findMany() {
+        calls.push('articleEntityMention.findMany');
+        return mentionRecords;
+      },
+    },
     article: {
       upsertCalls: [] as Array<{ where: { normalizedUrl: string } }>,
       async upsert(args: { where: { normalizedUrl: string } }) {
@@ -264,14 +340,39 @@ function createDatabaseDouble(
           status: ArticleProcessingStatus;
           preFilterReason?: string;
         };
+        update: {
+          importance?: null;
+          llmCacheId?: null;
+          preFilterReason?: string;
+          processedAt?: null;
+          status: ArticleProcessingStatus;
+          summary?: null;
+        };
       }>,
       async upsert(args: {
         create: {
           status: ArticleProcessingStatus;
           preFilterReason?: string;
         };
+        update: {
+          importance?: null;
+          llmCacheId?: null;
+          preFilterReason?: string;
+          processedAt?: null;
+          status: ArticleProcessingStatus;
+          summary?: null;
+        };
       }) {
         calls.push(`articleLabel.upsert:${args.create.status}`);
+        if (
+          args.update.status === ArticleProcessingStatus.FILTERED &&
+          args.update.importance === null &&
+          args.update.llmCacheId === null &&
+          args.update.processedAt === null &&
+          args.update.summary === null
+        ) {
+          calls.push('articleLabel.upsert:FILTERED:cleared');
+        }
         this.upsertCalls.push(args);
         return { id: 'label_1' };
       },
@@ -294,6 +395,35 @@ function createDatabaseDouble(
       async upsert() {
         calls.push('feedArticle.upsert');
         return { id: 'feed_article_1' };
+      },
+    },
+    graphEdge: {
+      async deleteMany(args: {
+        where: {
+          fromNodeId?: string;
+          kind?: string;
+          toNodeId?: string;
+        };
+      }) {
+        calls.push(
+          `graphEdge.deleteMany:${args.where.kind}:${args.where.fromNodeId}->${args.where.toNodeId}`,
+        );
+        return { count: 1 };
+      },
+      async updateMany(args: {
+        data: {
+          weight: number;
+        };
+        where: {
+          fromNodeId?: string;
+          kind?: string;
+          toNodeId?: string;
+        };
+      }) {
+        calls.push(
+          `graphEdge.updateMany:${args.where.kind}:${args.where.fromNodeId}->${args.where.toNodeId}:${args.data.weight}`,
+        );
+        return { count: 1 };
       },
     },
   };
@@ -319,6 +449,24 @@ function createScheduleDatabaseDouble(
   ],
 ) {
   return {
+    articleAxisAssignment: {
+      async deleteMany() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
+    articleCategoryAssignment: {
+      async deleteMany() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
+    articleEntityMention: {
+      async deleteMany() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+      async findMany() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
     article: {
       async upsert() {
         throw new Error('Not used by scheduled feed pulls.');
@@ -343,6 +491,14 @@ function createScheduleDatabaseDouble(
     },
     feedArticle: {
       async upsert() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+    },
+    graphEdge: {
+      async deleteMany() {
+        throw new Error('Not used by scheduled feed pulls.');
+      },
+      async updateMany() {
         throw new Error('Not used by scheduled feed pulls.');
       },
     },
