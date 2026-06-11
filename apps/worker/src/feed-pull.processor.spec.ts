@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ArticleProcessingStatus, FeedStatus } from './prisma-enums.js';
-import {
-  pullFeedJob,
-  scheduleFeedPullsJob,
-} from './feed-pull.processor.js';
+import { pullFeedJob, scheduleFeedPullsJob } from './feed-pull.processor.js';
 
 describe('scheduleFeedPullsJob', () => {
   it('enqueues one deduplicated pull job for each active feed', async () => {
@@ -149,7 +146,10 @@ describe('pullFeedJob', () => {
       'articleProcessing.enqueue',
       'feed.update:ACTIVE',
     ]);
-    assert.equal(database.article.upsertCalls[0]?.where.normalizedUrl, 'https://example.com/article?a=1&b=2');
+    assert.equal(
+      database.article.upsertCalls[0]?.where.normalizedUrl,
+      'https://example.com/article?a=1&b=2',
+    );
     assert.deepEqual(enqueuedJobs, [
       {
         articleId: 'article_1',
@@ -189,7 +189,10 @@ describe('pullFeedJob', () => {
     );
 
     assert.ok(calls.includes('articleLabel.upsert:FILTERED'));
-    assert.equal(database.articleLabel.upsertCalls[0]?.create.preFilterReason, 'too_short');
+    assert.equal(
+      database.articleLabel.upsertCalls[0]?.create.preFilterReason,
+      'too_short',
+    );
     assert.equal(enqueuedJobs, 0);
   });
 

@@ -27,8 +27,9 @@ export async function parseFeedUrl(url: string): Promise<ParsedFeed> {
     }
 
     const itemRecord = item as Record<string, unknown>;
+    const contentEncoded = itemRecord['content:encoded'];
     const content =
-      itemRecord['content:encoded'] ??
+      (typeof contentEncoded === 'string' ? contentEncoded : undefined) ??
       item.content ??
       item.contentSnippet ??
       item.summary ??
@@ -37,8 +38,13 @@ export async function parseFeedUrl(url: string): Promise<ParsedFeed> {
     items.push({
       title: item.title,
       url: itemUrl,
-      content: String(content),
-      author: item.creator ?? item.author,
+      content,
+      author:
+        typeof item.creator === 'string'
+          ? item.creator
+          : typeof item.author === 'string'
+            ? item.author
+            : undefined,
       publishedAt: item.isoDate ? new Date(item.isoDate) : undefined,
       externalId: item.guid,
     });

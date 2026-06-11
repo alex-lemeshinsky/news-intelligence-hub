@@ -27,7 +27,8 @@ describe('preFilterArticle', () => {
   it('accepts content above the minimum length and exposes stripped text', () => {
     const result = preFilterArticle(
       {
-        content: '<p>This article has clearly enough substantive body text.</p>',
+        content:
+          '<p>This article has clearly enough substantive body text.</p>',
         title: 'Real article',
       },
       options,
@@ -70,10 +71,8 @@ describe('preFilterArticle', () => {
       true,
     );
     assert.equal(
-      preFilterArticle(
-        { content: 'x'.repeat(19), title: 'Below' },
-        options,
-      ).reason,
+      preFilterArticle({ content: 'x'.repeat(19), title: 'Below' }, options)
+        .reason,
       'too_short',
     );
   });

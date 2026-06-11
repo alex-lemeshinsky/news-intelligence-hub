@@ -112,9 +112,7 @@ describe('processDigestJob', () => {
 
     assert.ok(calls.includes('digest.update:COMPLETED'));
     assert.ok(calls.includes('llmTelemetry.create:DIGEST:OPENAI:false:0'));
-    assert.ok(
-      calls.includes('llmTelemetry.create:DIGEST:ANTHROPIC:true:55'),
-    );
+    assert.ok(calls.includes('llmTelemetry.create:DIGEST:ANTHROPIC:true:55'));
   });
 
   it('completes an empty digest without spending LLM tokens', async () => {
@@ -238,9 +236,7 @@ describe('processDigestJob', () => {
 
     assert.ok(calls.includes('digest.update:FAILED'));
     assert.ok(calls.includes('llmTelemetry.create:DIGEST:OPENAI:false:0'));
-    assert.ok(
-      calls.includes('llmTelemetry.create:DIGEST:ANTHROPIC:false:0'),
-    );
+    assert.ok(calls.includes('llmTelemetry.create:DIGEST:ANTHROPIC:false:0'));
   });
 });
 

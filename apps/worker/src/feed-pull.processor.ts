@@ -315,8 +315,8 @@ export function normalizeArticleUrl(url: string): string {
   parsedUrl.protocol = parsedUrl.protocol.toLowerCase();
   parsedUrl.hostname = parsedUrl.hostname.toLowerCase();
 
-  const sortedParams = [...parsedUrl.searchParams.entries()].sort(([left], [right]) =>
-    left.localeCompare(right),
+  const sortedParams = [...parsedUrl.searchParams.entries()].sort(
+    ([left], [right]) => left.localeCompare(right),
   );
   parsedUrl.search = '';
   for (const [key, value] of sortedParams) {

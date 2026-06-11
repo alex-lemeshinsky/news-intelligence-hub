@@ -23,7 +23,9 @@ export interface DigestDependencies {
 
 export interface DigestDatabase {
   articleLabel: {
-    findMany(args: Record<string, unknown>): Promise<DigestArticleLabelRecord[]>;
+    findMany(
+      args: Record<string, unknown>,
+    ): Promise<DigestArticleLabelRecord[]>;
   };
   digest: {
     findFirst(args: Record<string, unknown>): Promise<DigestRecord | null>;

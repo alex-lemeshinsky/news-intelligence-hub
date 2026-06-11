@@ -45,15 +45,21 @@ export interface ArticleProcessingDatabase {
     findMany(args: Record<string, unknown>): Promise<ArticleMentionRecord[]>;
   };
   articleLabel: {
-    findFirst(args: Record<string, unknown>): Promise<ArticleLabelRecord | null>;
-    findMany(args: Record<string, unknown>): Promise<ArticleLabelPointerRecord[]>;
+    findFirst(
+      args: Record<string, unknown>,
+    ): Promise<ArticleLabelRecord | null>;
+    findMany(
+      args: Record<string, unknown>,
+    ): Promise<ArticleLabelPointerRecord[]>;
     update(args: Record<string, unknown>): Promise<unknown>;
   };
   category: {
     findMany(args: Record<string, unknown>): Promise<CategoryRecord[]>;
   };
   classificationAxis: {
-    findMany(args: Record<string, unknown>): Promise<ClassificationAxisRecord[]>;
+    findMany(
+      args: Record<string, unknown>,
+    ): Promise<ClassificationAxisRecord[]>;
   };
   entity: {
     create(args: Record<string, unknown>): Promise<EntityRecord>;
@@ -73,7 +79,9 @@ export interface ArticleProcessingDatabase {
     create(args: Record<string, unknown>): Promise<unknown>;
   };
   regenerationRun: {
-    findFirst(args: Record<string, unknown>): Promise<RegenerationRunRecord | null>;
+    findFirst(
+      args: Record<string, unknown>,
+    ): Promise<RegenerationRunRecord | null>;
     update(args: Record<string, unknown>): Promise<unknown>;
   };
 }
@@ -241,8 +249,7 @@ export async function processRegenerationJob(
     await updateRegenerationProgress(dependencies.database, run.id, {
       failed,
       processed,
-      status:
-        failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
+      status: failed > 0 ? BackgroundStatus.FAILED : BackgroundStatus.COMPLETED,
     });
 
     structuredLog('regeneration.completed', {
@@ -335,7 +342,8 @@ async function processArticleLabel(
     if (mode.operation === LlmOperation.ARTICLE_ANALYSIS) {
       const preFilter = preFilterArticle(
         {
-          content: label.article.extractedText ?? label.article.rawContent ?? '',
+          content:
+            label.article.extractedText ?? label.article.rawContent ?? '',
           title: label.article.title,
         },
         {
@@ -993,8 +1001,7 @@ async function countCoMentionedArticles(
   }
 
   return [...mentionsByLabel.values()].filter(
-    (entityIds) =>
-      entityIds.has(leftEntityId) && entityIds.has(rightEntityId),
+    (entityIds) => entityIds.has(leftEntityId) && entityIds.has(rightEntityId),
   ).length;
 }
 
@@ -1026,8 +1033,7 @@ function matchAxisAssignments(
     }
 
     const value = axis.values.find(
-      (axisValue) =>
-        axisValue.toLowerCase() === assignment.value.toLowerCase(),
+      (axisValue) => axisValue.toLowerCase() === assignment.value.toLowerCase(),
     );
     if (!value) {
       continue;
@@ -1128,9 +1134,7 @@ function attemptsForResponse(
   );
 }
 
-function providerModelsForCache(
-  llm: LlmArticleAnalyzer,
-): LlmProviderModel[] {
+function providerModelsForCache(llm: LlmArticleAnalyzer): LlmProviderModel[] {
   if (llm.providerModels && llm.providerModels.length > 0) {
     return llm.providerModels;
   }

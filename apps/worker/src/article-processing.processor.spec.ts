@@ -37,7 +37,8 @@ describe('processArticleJob', () => {
                   },
                 ],
                 importance: 'HIGH',
-                summary: 'Microsoft shipped a new AI runtime for cloud workloads.',
+                summary:
+                  'Microsoft shipped a new AI runtime for cloud workloads.',
               },
               usage: {
                 completionTokens: 40,
@@ -61,8 +62,16 @@ describe('processArticleJob', () => {
     assert.ok(calls.includes('articleCategoryAssignment.createMany:1'));
     assert.ok(calls.includes('articleAxisAssignment.createMany:1'));
     assert.ok(calls.includes('articleEntityMention.createMany:2'));
-    assert.ok(calls.includes('graphEdge.upsert:MENTIONS:article:article_1->entity:entity_microsoft'));
-    assert.ok(calls.includes('graphEdge.upsert:CO_MENTION:entity:entity_azure_ai->entity:entity_microsoft'));
+    assert.ok(
+      calls.includes(
+        'graphEdge.upsert:MENTIONS:article:article_1->entity:entity_microsoft',
+      ),
+    );
+    assert.ok(
+      calls.includes(
+        'graphEdge.upsert:CO_MENTION:entity:entity_azure_ai->entity:entity_microsoft',
+      ),
+    );
     assert.ok(calls.includes('llmTelemetry.create:true:140'));
   });
 
@@ -145,14 +154,10 @@ describe('processArticleJob', () => {
     );
     assert.ok(calls.includes('articleLabel.update:PROCESSED:NORMAL'));
     assert.ok(
-      calls.includes(
-        'llmTelemetry.create:ARTICLE_ANALYSIS:OPENAI:false:0',
-      ),
+      calls.includes('llmTelemetry.create:ARTICLE_ANALYSIS:OPENAI:false:0'),
     );
     assert.ok(
-      calls.includes(
-        'llmTelemetry.create:ARTICLE_ANALYSIS:ANTHROPIC:true:30',
-      ),
+      calls.includes('llmTelemetry.create:ARTICLE_ANALYSIS:ANTHROPIC:true:30'),
     );
   });
 
@@ -541,14 +546,10 @@ describe('processArticleJob', () => {
 
     assert.ok(calls.includes('articleLabel.update:FAILED'));
     assert.ok(
-      calls.includes(
-        'llmTelemetry.create:ARTICLE_ANALYSIS:OPENAI:false:0',
-      ),
+      calls.includes('llmTelemetry.create:ARTICLE_ANALYSIS:OPENAI:false:0'),
     );
     assert.ok(
-      calls.includes(
-        'llmTelemetry.create:ARTICLE_ANALYSIS:ANTHROPIC:false:0',
-      ),
+      calls.includes('llmTelemetry.create:ARTICLE_ANALYSIS:ANTHROPIC:false:0'),
     );
   });
 });
@@ -839,7 +840,7 @@ interface DatabaseDoubleOptions {
   articleLabelFindManyError?: Error;
   articleLabelRows?: ArticleLabelRow[];
   cachedResponse?: unknown;
-  cachedResponses?: Array<unknown | null>;
+  cachedResponses?: Array<unknown>;
   existingMentions?: string[];
   labelStatus?: string;
   regenerationRunArticleLabelIds?: string[];
@@ -905,8 +906,7 @@ function createArticleProcessingDatabaseDouble(
         calls.push('articleLabel.findFirst');
         const label = articleLabelRows.find(
           (row) =>
-            row.id === args.where.id &&
-            row.articleId === args.where.articleId,
+            row.id === args.where.id && row.articleId === args.where.articleId,
         );
         if (!label) {
           return null;
@@ -943,7 +943,7 @@ function createArticleProcessingDatabaseDouble(
             ? `articleLabel.update:${args.data.status}:${args.data.importance}`
             : args.data.status === 'FILTERED'
               ? `articleLabel.update:${args.data.status}:${args.data.preFilterReason}`
-            : `articleLabel.update:${args.data.status}`,
+              : `articleLabel.update:${args.data.status}`,
         );
         if (
           args.data.status === 'FILTERED' &&
@@ -1110,16 +1110,14 @@ function createArticleProcessingDatabaseDouble(
         const queuedResponse =
           cacheResponses.length > 0 ? cacheResponses.shift() : undefined;
         const response =
-          queuedResponse === undefined ? options.cachedResponse : queuedResponse;
+          queuedResponse === undefined
+            ? options.cachedResponse
+            : queuedResponse;
         calls.push(
-          response
-            ? 'llmCache.findUnique:hit'
-            : 'llmCache.findUnique:miss',
+          response ? 'llmCache.findUnique:hit' : 'llmCache.findUnique:miss',
         );
         calls.push(
-          `llmCache.findUnique:${operation}:${
-            response ? 'hit' : 'miss'
-          }`,
+          `llmCache.findUnique:${operation}:${response ? 'hit' : 'miss'}`,
         );
         return response
           ? {
@@ -1140,7 +1138,9 @@ function createArticleProcessingDatabaseDouble(
           totalTokens: number;
         };
       }) {
-        calls.push(`llmTelemetry.create:${args.data.success}:${args.data.totalTokens}`);
+        calls.push(
+          `llmTelemetry.create:${args.data.success}:${args.data.totalTokens}`,
+        );
         calls.push(
           `llmTelemetry.create:${args.data.operation}:${args.data.success}:${args.data.totalTokens}`,
         );
@@ -1177,10 +1177,7 @@ function createArticleProcessingDatabaseDouble(
             `regenerationRun.update:progress:${args.data.processed ?? 'same'}:${args.data.failed ?? 'same'}`,
           );
         }
-        if (
-          args.data.processed &&
-          typeof args.data.processed !== 'number'
-        ) {
+        if (args.data.processed && typeof args.data.processed !== 'number') {
           calls.push('regenerationRun.update:processed');
         }
         if (args.data.failed && typeof args.data.failed !== 'number') {

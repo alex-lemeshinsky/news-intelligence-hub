@@ -1,4 +1,4 @@
-import { JobsOptions, Queue, Worker } from 'bullmq';
+import { type ConnectionOptions, JobsOptions, Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import {
   JOB_NAMES,
@@ -45,7 +45,9 @@ function getQueue(name: QueueName): Queue {
     return existingQueue;
   }
 
-  const queue = new Queue(name, { connection });
+  const queue = new Queue(name, {
+    connection: connection as unknown as ConnectionOptions,
+  });
   queueMap.set(name, queue);
   return queue;
 }
@@ -66,14 +68,10 @@ const dependencies = {
       payload: FeedPullJobData,
       options: JobsOptions = {},
     ) => {
-      await getQueue(QUEUE_NAMES.feedPull).add(
-        JOB_NAMES.pullFeed,
-        payload,
-        {
-          ...defaultJobOptions(),
-          ...options,
-        },
-      );
+      await getQueue(QUEUE_NAMES.feedPull).add(JOB_NAMES.pullFeed, payload, {
+        ...defaultJobOptions(),
+        ...options,
+      });
     },
     enqueueArticleProcessing: async (payload: ArticleProcessingJobData) => {
       await getQueue(QUEUE_NAMES.articleProcessing).add(
@@ -102,7 +100,7 @@ function createWorker(name: QueueName): Worker {
         name === QUEUE_NAMES.articleProcessing
           ? parseIntegerEnv('LLM_CONCURRENCY', 2)
           : parseIntegerEnv('WORKER_CONCURRENCY', 4),
-      connection,
+      connection: connection as unknown as ConnectionOptions,
     },
   );
 }
@@ -135,8 +133,7 @@ function parseIntegerEnv(name: string, fallback: number): number {
 }
 
 async function configureScheduledFeedPulls(): Promise<void> {
-  const pattern =
-    process.env.FEED_PULL_CRON?.trim() || DEFAULT_FEED_PULL_CRON;
+  const pattern = process.env.FEED_PULL_CRON?.trim() || DEFAULT_FEED_PULL_CRON;
   const startDate = Date.now() + FEED_PULL_SCHEDULER_START_DELAY_MS;
   await getQueue(QUEUE_NAMES.feedPull).upsertJobScheduler(
     FEED_PULL_SCHEDULER_ID,

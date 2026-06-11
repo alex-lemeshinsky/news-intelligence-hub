@@ -1,8 +1,4 @@
-import {
-  ArticleImportance,
-  EntityType,
-  LlmProvider,
-} from './prisma-enums.js';
+import { ArticleImportance, EntityType, LlmProvider } from './prisma-enums.js';
 
 export interface ArticleAnalysisInput {
   axes: Array<{
@@ -213,7 +209,9 @@ export function createConfiguredLlmClient(): LlmArticleAnalyzer &
         }),
       );
     },
-    async buildDigest(input: DigestBuildInput): Promise<LlmDigestBuildResponse> {
+    async buildDigest(
+      input: DigestBuildInput,
+    ): Promise<LlmDigestBuildResponse> {
       return callWithFailover(providerModels, (providerModel) =>
         callDigestProvider({
           ...providerModel,
@@ -341,9 +339,7 @@ export function validateArticleAnalysis(value: unknown): ArticleAnalysis {
   const record = asRecord(value, 'article analysis');
   const summary = readNonEmptyString(record.summary, 'summary');
   const importance = normalizeImportance(record.importance);
-  const entities = readArray(record.entities, 'entities').map(
-    normalizeEntity,
-  );
+  const entities = readArray(record.entities, 'entities').map(normalizeEntity);
   const categories = uniqueStrings(readArray(record.categories, 'categories'));
   const axes = readArray(record.axes, 'axes').map(normalizeAxisAssignment);
 
@@ -559,16 +555,14 @@ function buildArticleAnalysisPrompt(input: ArticleAnalysisInput): string {
     },
     availableAxes: input.axes,
     availableCategories: input.categories,
-    task:
-      'Summarize the article, classify importance, extract named entities, assign matching categories, and assign matching axis values.',
+    task: 'Summarize the article, classify importance, extract named entities, assign matching categories, and assign matching axis values.',
   });
 }
 
 function buildDigestPrompt(input: DigestBuildInput): string {
   return JSON.stringify({
     digest: input,
-    task:
-      'Summarize the period in one compact paragraph, emphasizing notable entities, categories, and key articles.',
+    task: 'Summarize the period in one compact paragraph, emphasizing notable entities, categories, and key articles.',
   });
 }
 
@@ -616,9 +610,7 @@ function readOpenAiOutputText(value: unknown): string {
   const output = readArray(record.output, 'OpenAI output');
   for (const item of output) {
     const itemRecord = asRecord(item, 'OpenAI output item');
-    const content = Array.isArray(itemRecord.content)
-      ? itemRecord.content
-      : [];
+    const content = Array.isArray(itemRecord.content) ? itemRecord.content : [];
     for (const contentItem of content) {
       const contentRecord = asRecord(contentItem, 'OpenAI content item');
       if (typeof contentRecord.text === 'string') {
@@ -847,7 +839,9 @@ function zeroUsage(): LlmUsage {
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'LLM provider attempt failed.';
+  return error instanceof Error
+    ? error.message
+    : 'LLM provider attempt failed.';
 }
 
 function isLlmAttemptTelemetry(value: unknown): value is LlmAttemptTelemetry {
@@ -885,9 +879,7 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function asOptionalRecord(
-  value: unknown,
-): Record<string, unknown> | undefined {
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
@@ -946,9 +938,7 @@ function uniqueStrings(values: unknown[]): string[] {
 }
 
 function isArticleImportance(value: string): value is ArticleImportance {
-  return Object.values(ArticleImportance).includes(
-    value as ArticleImportance,
-  );
+  return Object.values(ArticleImportance).includes(value as ArticleImportance);
 }
 
 function isEntityType(value: string): value is EntityType {

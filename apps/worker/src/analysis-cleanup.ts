@@ -124,8 +124,7 @@ async function countCoMentionedArticles(
   }
 
   return [...mentionsByLabel.values()].filter(
-    (entityIds) =>
-      entityIds.has(leftEntityId) && entityIds.has(rightEntityId),
+    (entityIds) => entityIds.has(leftEntityId) && entityIds.has(rightEntityId),
   ).length;
 }
 
