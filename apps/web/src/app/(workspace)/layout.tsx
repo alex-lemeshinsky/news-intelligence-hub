@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { LogoutButton } from "@/components/workspace/logout-button";
+import { WorkspaceNav } from "@/components/workspace/workspace-nav";
 import { requireCurrentUser } from "@/lib/auth/session";
 
 export default async function WorkspaceLayout({
@@ -21,32 +21,7 @@ export default async function WorkspaceLayout({
             <p className="mt-1 text-xs text-slate-500">{user.email}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <nav className="flex rounded-md border border-slate-200 bg-slate-50 p-1">
-              <Link
-                className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
-                href="/workspace"
-              >
-                Feed
-              </Link>
-              <Link
-                className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
-                href="/workspace/graph"
-              >
-                Graph
-              </Link>
-              <Link
-                className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
-                href="/workspace/digests"
-              >
-                Digests
-              </Link>
-              <Link
-                className="rounded px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-white hover:text-slate-950"
-                href="/workspace/settings"
-              >
-                Settings
-              </Link>
-            </nav>
+            <WorkspaceNav />
             <LogoutButton />
           </div>
         </div>
