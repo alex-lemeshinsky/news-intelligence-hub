@@ -277,7 +277,7 @@ export function WorkspaceClient({
               Add
             </button>
           </form>
-          <div className="mt-5 space-y-3">
+          <div className="mt-5 min-w-0 space-y-3">
             {feeds.length > 0 ? (
               feeds.map((feed) => (
                 <FeedRow
@@ -403,10 +403,12 @@ function FeedRow({
     <article className="rounded-md border border-slate-200 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-slate-950">
+          <h3 className="text-sm font-semibold text-slate-950 [overflow-wrap:anywhere]">
             {title}
           </h3>
-          <p className="mt-1 truncate text-xs text-slate-500">{feed.url}</p>
+          <p className="mt-1 text-xs text-slate-500 [overflow-wrap:anywhere]">
+            {feed.url}
+          </p>
         </div>
         <span className={statusClass(feed.status)}>{statusLabel}</span>
       </div>
@@ -457,13 +459,13 @@ function ArticleRow({
   onOpenArticle: (articleLabelId: string) => Promise<void>;
 }) {
   return (
-    <article className="p-5">
+    <article className="min-w-0 p-5">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
-          <h3 className="text-base font-semibold text-slate-950">
+          <h3 className="text-base font-semibold text-slate-950 [overflow-wrap:anywhere]">
             {article.title}
           </h3>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-slate-500 [overflow-wrap:anywhere]">
             {article.sourceTitle ?? "Unknown source"}
             {article.publishedAt ? ` / ${formatDate(article.publishedAt)}` : ""}
           </p>
@@ -480,11 +482,11 @@ function ArticleRow({
         </div>
       </div>
       {article.summary ? (
-        <p className="mt-3 text-sm leading-6 text-slate-600">
+        <p className="mt-3 text-sm leading-6 text-slate-600 [overflow-wrap:anywhere]">
           {article.summary}
         </p>
       ) : (
-        <p className="mt-3 text-sm leading-6 text-slate-500">
+        <p className="mt-3 text-sm leading-6 text-slate-500 [overflow-wrap:anywhere]">
           {article.preFilterReason
             ? `Filtered before LLM analysis: ${article.preFilterReason.replace("_", " ")}.`
             : "Awaiting processing summary."}
@@ -493,7 +495,7 @@ function ArticleRow({
       <div className="mt-4 flex flex-wrap gap-2">
         {article.categories.map((category) => (
           <span
-            className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700"
+            className="max-w-full rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 [overflow-wrap:anywhere]"
             key={category.id}
           >
             {category.name}
@@ -501,7 +503,7 @@ function ArticleRow({
         ))}
         {article.axes.map((axis) => (
           <span
-            className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600"
+            className="max-w-full rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 [overflow-wrap:anywhere]"
             key={axis.axisId}
           >
             {axis.axisName}: {axis.value}
@@ -512,7 +514,7 @@ function ArticleRow({
         <div className="mt-4 flex flex-wrap gap-2">
           {article.entities.map((entity) => (
             <span
-              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700"
+              className="max-w-full rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700 [overflow-wrap:anywhere]"
               key={entity.id}
             >
               {entity.name} · {entity.type.toLowerCase()}
@@ -566,6 +568,7 @@ function ArticleFiltersBar({
   return (
     <div className="grid gap-3 md:grid-cols-5">
       <SelectFilter
+        name="categoryId"
         label="Category"
         value={filters.categoryId ?? ""}
         disabled={pending}
@@ -576,6 +579,7 @@ function ArticleFiltersBar({
         }))}
       />
       <SelectFilter
+        name="feedId"
         label="Feed"
         value={filters.feedId ?? ""}
         disabled={pending}
@@ -586,6 +590,7 @@ function ArticleFiltersBar({
         }))}
       />
       <SelectFilter
+        name="importance"
         label="Importance"
         value={filters.importance ?? ""}
         disabled={pending}
@@ -599,6 +604,7 @@ function ArticleFiltersBar({
         ]}
       />
       <SelectFilter
+        name="status"
         label="State"
         value={filters.status ?? ""}
         disabled={pending}
@@ -616,6 +622,7 @@ function ArticleFiltersBar({
         ]}
       />
       <SelectFilter
+        name="timeWindow"
         label="Period"
         value={filters.timeWindow ?? ""}
         disabled={pending}
@@ -638,12 +645,14 @@ function ArticleFiltersBar({
 function SelectFilter({
   disabled,
   label,
+  name,
   onChange,
   options,
   value,
 }: {
   disabled: boolean;
   label: string;
+  name: string;
   onChange: (value: string | undefined) => void;
   options: Array<{
     label: string;
@@ -651,12 +660,17 @@ function SelectFilter({
   }>;
   value: string;
 }) {
+  const id = `article-filter-${name}`;
+
   return (
-    <label className="block">
+    <label className="block min-w-0" htmlFor={id}>
       <span className="text-xs font-medium text-slate-600">{label}</span>
       <select
         className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:text-slate-400"
+        aria-label={label}
         disabled={disabled}
+        id={id}
+        name={name}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value || undefined)}
       >
