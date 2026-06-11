@@ -109,7 +109,7 @@ directly rather than produced by the analysis pipeline.
 - `npm run lint`: run all configured lint/type-check commands.
 - `npm run lint:api`: lint and fix the API.
 - `npm run lint:web`: lint the frontend.
-- `npm run lint:worker`: type-check the worker.
+- `npm run lint:worker`: lint and type-check the worker.
 - `npm run lint:shared`: type-check shared contracts.
 - `npm run lint:database`: type-check the database package.
 - `npm run test:api`: run API unit tests.
